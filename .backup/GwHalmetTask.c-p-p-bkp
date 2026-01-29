@@ -1,0 +1,193 @@
+#ifdef BOARD_HALMET
+#include "GwHalmetTask.h"
+#include "GwApi.h"
+#include <WiFi.h>
+#include <esp_wifi.h>
+
+#include <NimBLEDevice.h>
+
+
+// #include "GwChannelInterface.h"
+#include "GwChannel.h"
+#include "GwChannelList.h"
+#include "N2kMessages.h"
+
+#include "navlink.cpp"
+
+#define SERVICE_UUID        "ABF0"
+#define CHARACTERISTIC_UUID "ABF2"
+#define BLE_DEVICE_NAME     "NAVLinkBlue-1234"
+
+static GwApi* g_api = nullptr;
+
+// Server callback to handle connection/disconnection events
+class ServerCallbacks: public NimBLEServerCallbacks {
+public:
+    void onConnect(NimBLEServer* pServer, NimBLEConnInfo& connInfo) override {
+         if (g_api) g_api->getLogger()->logDebug(GwLog::ERROR, "Client: %s\n", connInfo.getAddress().toString().c_str());
+    }
+    
+    void onDisconnect(NimBLEServer* pServer, NimBLEConnInfo& connInfo, int reason) override {
+        if (g_api) g_api->getLogger()->logDebug(GwLog::ERROR, "Client disconnected\n");
+    } 
+};
+
+static ServerCallbacks serverCallbacks;
+
+
+void halmetTask(GwApi *api)
+{
+    g_api = api;
+    
+    // Wait for WiFi to be connected before starting OTA
+    int retries = 0;
+    while (WiFi.status() != WL_CONNECTED && retries < 50)
+    {
+        delay(100);
+        retries++;
+    }
+
+
+    bool startBle = true;
+    bool disableWifi = false;
+
+    if(startBle) {
+
+        // TODO Wait for a chance for WIFI to connect, then check if not connected, fall back to BLE
+        if (WiFi.status() == WL_CONNECTED)
+        {
+            api->getLogger()->logDebug(GwLog::ERROR, "WiFi connected, starting BLE soon");
+
+            // ArduinoOTA.setHostname("esp32-halmet");
+            // ArduinoOTA.begin();
+            // api->getLogger()->logDebug(GwLog::LOG, "OTA initialized on %s", WiFi.localIP().toString().c_str());
+            delay(3000);
+        }
+        
+        if(disableWifi) {
+            // ===== STOP AND DEALLOCATE WIFI RESOURCES BEFORE BLE =====
+            api->getLogger()->logDebug(GwLog::ERROR, "Stopping WiFi to free heap for BLE...");
+            
+            // Log heap before WiFi shutdown
+            size_t heapBefore = xPortGetFreeHeapSize();
+            api->getLogger()->logDebug(GwLog::ERROR, "Heap before WiFi stop: %u bytes", heapBefore);
+            
+            // Disconnect WiFi client
+            WiFi.disconnect(true);  // true = disable WiFi
+            delay(100);
+            
+            // Disconnect and disable WiFi AP
+            WiFi.softAPdisconnect(true);  // true = disable AP
+            delay(100);
+            
+            // Set WiFi mode to OFF/NULL to fully deallocate resources
+            WiFi.mode(WIFI_MODE_NULL);
+            delay(500);  // Wait for WiFi cleanup
+            
+            // Note: esp_wifi_stop/deinit are already called by WiFi.mode(WIFI_MODE_NULL)
+            // Calling them again causes ESP_ERR_WIFI_NOT_INIT errors
+            
+            // Log heap after WiFi shutdown
+            size_t heapAfter = xPortGetFreeHeapSize();
+            api->getLogger()->logDebug(GwLog::ERROR, "Heap after WiFi stop: %u bytes (freed: %u bytes)", 
+                                        heapAfter, heapAfter - heapBefore);
+            
+            api->getLogger()->logDebug(GwLog::ERROR, "WiFi stopped. Initializing BLE...");
+            api->getLogger()->flush();  // Ensure logs are written before BLE init
+            // ===== END WIFI SHUTDOWN =====
+        }
+
+        // Log heap before BLE init
+        size_t heapBeforeBLE = xPortGetFreeHeapSize();
+        api->getLogger()->logDebug(GwLog::ERROR, "Heap before BLE init: %u bytes", heapBeforeBLE);
+        api->getLogger()->flush();
+
+        // Initialize BLE
+        NimBLEDevice::init(BLE_DEVICE_NAME);
+        NimBLEDevice::setPower(ESP_PWR_LVL_P9); // +9dbm
+        
+        NimBLEServer *pServer = NimBLEDevice::createServer();
+        pServer->setCallbacks(&serverCallbacks);
+        pServer->advertiseOnDisconnect(true);
+        
+        NimBLEService *pService = pServer->createService(SERVICE_UUID);
+        NimBLECharacteristic *pCharacteristic = pService->createCharacteristic(
+                                                    CHARACTERISTIC_UUID,
+                                                    NIMBLE_PROPERTY::READ | 
+                                                    NIMBLE_PROPERTY::WRITE |
+                                                    NIMBLE_PROPERTY::NOTIFY
+                                                    );
+        
+        pService->start();
+        
+        // Attach BLE characteristic to NavLink channel
+        extern NavLinkChannelImpl *navLinkImpl;
+        if (navLinkImpl != nullptr) {
+            navLinkImpl->setBleCharacteristic(pCharacteristic);
+        }
+        
+        // Configure and start advertising
+        NimBLEAdvertising *pAdvertising = NimBLEDevice::getAdvertising();
+        pAdvertising->addServiceUUID(SERVICE_UUID);
+        
+        // Explicitly set the device name in advertising data for macOS visibility
+        NimBLEAdvertisementData advertisementData;
+        advertisementData.setName(BLE_DEVICE_NAME);
+        advertisementData.setCompleteServices(NimBLEUUID(SERVICE_UUID));
+        pAdvertising->setAdvertisementData(advertisementData);
+        
+        // Set scan response data
+        NimBLEAdvertisementData scanResponseData;
+        scanResponseData.setName(BLE_DEVICE_NAME);
+        pAdvertising->setScanResponseData(scanResponseData);
+        pAdvertising->start();
+        
+        // Log final results
+        size_t heapAfterBLE = xPortGetFreeHeapSize();
+        api->getLogger()->logDebug(GwLog::ERROR, "BLE Ready - Heap: %u", heapAfterBLE);
+        api->getLogger()->flush();
+
+    }
+
+    // Periodic status reporting
+    int counter = 0;
+    tN2kMsg testMsg2;  // Allocate once
+    while (true)
+    {
+        delay(30000); // 30 second intervals
+        counter++;
+        api->getLogger()->logDebug(GwLog::ERROR, "BLE up %d - Heap: %u", counter, xPortGetFreeHeapSize());
+        api->getLogger()->flush();
+
+        SetN2kTemperatureExt(testMsg2, 0, 1, N2kts_SeaTemperature, CToKelvin(25.5));
+        api->sendN2kMessage(testMsg2);
+
+    }
+    vTaskDelete(NULL);
+}
+
+NavLinkChannelImpl *navLinkImpl = nullptr;
+
+void halmetInit(GwApi *api)
+{
+    // Stack size 8000 - optimized for BLE operations
+    api->addUserTask(halmetTask, "halmetTask", 6000);
+
+
+    GwLog *logger = api->getLogger();
+
+    // Create NavLink channel
+    navLinkImpl = new NavLinkChannelImpl(logger);
+    GwChannel *channel = new GwChannel(logger, "NavLink", NAVLINK_CHANNEL_ID, -1);
+    channel->setImpl(navLinkImpl);
+    
+    // NOTE: readActisense MUST be true for channelStream to be set!
+    channel->begin(true, false, false, "", "", false, false, true, true);
+    
+    extern GwChannelList channels;
+    channels.addChannel(channel);
+
+
+
+}
+#endif

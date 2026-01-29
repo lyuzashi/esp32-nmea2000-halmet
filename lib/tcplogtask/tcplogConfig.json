@@ -1,0 +1,11 @@
+{
+  "name": "tcplogtask",
+  "title": "TCP Log Streaming",
+  "description": "Stream logs over TCP for remote monitoring",
+  "version": "1.0.0",
+  "initFunction": "tcpLogInit",
+  "capabilities": {
+    "tcpLog": "Streams logs over TCP"
+  },
+  "config": []
+}

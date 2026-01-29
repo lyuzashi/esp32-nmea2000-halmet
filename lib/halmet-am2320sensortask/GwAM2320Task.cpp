@@ -1,0 +1,180 @@
+#include "GwAM2320Task.h"
+
+#ifdef BOARD_HALMET  // Only compile for halmet board
+#ifdef AM2320_ENABLED  // Only if AM2320 support is enabled
+#ifdef _GWIIC        // Only if I2C is enabled
+
+#include "GwIicSensors.h"
+#include <Adafruit_AM2320.h>
+#include "N2kMessages.h"
+
+// Forward declaration
+class AM2320Config;
+static GwSensorConfigInitializerList<AM2320Config> configs;
+
+class AM2320Config : public IICSensorBase {
+public:
+    // Configuration parameters (hardcoded for simplicity)
+    bool tmAct = true;
+    bool huAct = true;
+    tN2kTempSource tmSrc = N2kts_InsideTemperature;
+    tN2kHumiditySource huSrc = N2khs_InsideHumidity;
+    String tmNam = "InTemp";
+    String huNam = "InHum";
+    
+    Adafruit_AM2320 *device = nullptr;
+    
+    using IICSensorBase::IICSensorBase;
+    
+    virtual bool isActive() override {
+        return tmAct || huAct;
+    }
+    
+    virtual bool initDevice(GwApi *api, TwoWire *wire) override {
+        if (!isActive()) return false;
+        
+        GwLog *logger = api->getLogger();
+        device = new Adafruit_AM2320(wire);
+        
+        if (!device->begin()) {
+            LOG_DEBUG(GwLog::ERROR, "unable to initialize %s at 0x%x", prefix.c_str(), addr);
+            delete device;
+            device = nullptr;
+            return false;
+        }
+        
+        LOG_DEBUG(GwLog::LOG, "initialized %s at address 0x%x, intv %ldms", 
+                  prefix.c_str(), addr, intv);
+        return true;
+    }
+    
+    virtual bool preinit(GwApi *api) override {
+        GwLog *logger = api->getLogger();
+        LOG_DEBUG(GwLog::LOG, "%s configured", prefix.c_str());
+        
+        // Register XDR mappings for NMEA0183 conversion
+        addTempXdr(api, *this);
+        addHumidXdr(api, *this);
+        
+        return isActive();
+    }
+    
+    virtual void measure(GwApi *api, TwoWire *wire, int counterId) override {
+        if (!device) return;
+        
+        GwLog *logger = api->getLogger();
+        
+        // Read temperature and humidity from sensor
+        float tempC = device->readTemperature();
+        float humid = device->readHumidity();
+        
+        // Check for valid readings (Adafruit lib returns NaN on error)
+        if (isnan(tempC) || isnan(humid)) {
+            LOG_DEBUG(GwLog::ERROR, "%s read error (NaN values)", prefix.c_str());
+            return;
+        }
+        
+        // Convert to correct units
+        double temp = tempC;
+        double humidity = humid;
+        
+        // Convert to Kelvin for NMEA2000
+        temp = CToKelvin(temp);
+        
+        LOG_DEBUG(GwLog::DEBUG, "%s temp=%.1f°K, humid=%.0f%%", 
+                  prefix.c_str(), temp, humidity);
+        
+        // Send individual messages
+        if (tmAct) {
+            tN2kMsg msg;
+            SetN2kTemperatureExt(msg, 1, iid, tmSrc, temp, N2kDoubleNA);
+            api->sendN2kMessage(msg);
+            api->increment(counterId, prefix + String("temp"));
+        }
+        
+        if (huAct) {
+            sendN2kHumidity(api, *this, humidity, counterId);
+        }
+        
+        // Send combined environmental parameters message
+        if (tmAct || huAct) {
+            sendN2kEnvironmentalParameters(api, *this, temp, humidity, N2kDoubleNA, counterId);
+        }
+    }
+    
+    virtual void readConfig(GwConfigHandler *cfg) override {
+        if (ok) return;
+        
+        // Read minimal configuration
+        bool enabled = cfg->getBool(prefix + "Act", true);
+        if (!enabled) {
+            tmAct = false;
+            huAct = false;
+        }
+        
+        iid = cfg->getInt(prefix + "iid", 99);
+        intv = cfg->getInt(prefix + "intv", 10) * 1000;  // Convert seconds to ms
+        
+        // Fixed settings
+        busId = 1;
+        addr = 0x5C;
+        
+        ok = true;
+    }
+};
+
+// Sensor creator function
+SensorBase::Creator creator = [](GwApi *api, const String &prfx) -> SensorBase* {
+    if (!configs.knowsPrefix(prfx)) return nullptr;
+    return new AM2320Config(api, prfx);
+};
+
+// Config initializer - defines AM2320 sensor on bus 1
+#define CFGAM2320(s, prefix, bus, baddr) \
+    CFG_SGET(s, tmAct, prefix);          \
+    CFG_SGET(s, huAct, prefix);          \
+    CFG_SGET(s, tmSrc, prefix);          \
+    CFG_SGET(s, huSrc, prefix);          \
+    CFG_SGET(s, iid, prefix);            \
+    CFG_SGET(s, intv, prefix);           \
+    CFG_SGET(s, tmNam, prefix);          \
+    CFG_SGET(s, huNam, prefix);          \
+    CFG_SGET(s, tmOff, prefix);          \
+    CFG_SGET(s, huOff, prefix);          \
+    s->busId = bus;                      \
+    s->addr = baddr;                     \
+    s->ok = true;                        \
+    s->intv *= 1000;
+
+#define SCAM2320(list, prefix, bus, addr) \
+    GWSENSORCONFIG(list, AM2320Config, prefix, [](AM2320Config *s, GwConfigHandler *cfg) { \
+        CFGAM2320(s, prefix, bus, addr); \
+    });
+
+// Define AM2320 sensor on bus 1, address 0x5C
+SCAM2320(configs, AM2320, 1, 0x5C);
+
+
+// Init function - registers the sensor
+void am2320TaskInit(GwApi *api) {
+    GwLog *logger = api->getLogger();
+    LOG_DEBUG(GwLog::LOG, "AM2320 task initializing...");
+    
+    // Create and configure the sensor
+    AM2320Config *sensor = new AM2320Config(api, "AM2320");
+    sensor->readConfig(api->getConfig());
+    
+    // Register with the API - iicTask will handle polling
+    if (sensor->ok) {
+        api->addSensor(sensor, false);  // false = config already read
+        LOG_DEBUG(GwLog::LOG, "AM2320 sensor registered");
+    } else {
+        LOG_DEBUG(GwLog::ERROR, "AM2320 sensor config invalid, not registered");
+        delete sensor;
+    }
+
+}
+
+#endif  // _GWIIC
+#endif  // AM2320_ENABLED
+#endif  // BOARD_HALMET

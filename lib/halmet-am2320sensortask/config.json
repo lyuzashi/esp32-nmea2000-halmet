@@ -1,0 +1,26 @@
+[
+    {
+        "name": "AM2320Act",
+        "label": "AM2320 Sensor",
+        "type": "boolean",
+        "default": "true",
+        "description": "Enable AM2320 temp/humidity sensor",
+        "category": "sensors"
+    },
+    {
+        "name": "AM2320iid",
+        "label": "Instance ID",
+        "type": "number",
+        "default": "99",
+        "description": "NMEA2000 instance ID",
+        "category": "sensors"
+    },
+    {
+        "name": "AM2320intv",
+        "label": "Interval (s)",
+        "type": "number",
+        "default": "10",
+        "description": "Measurement interval",
+        "category": "sensors"
+    }
+]
