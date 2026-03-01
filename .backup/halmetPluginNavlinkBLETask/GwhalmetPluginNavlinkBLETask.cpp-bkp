@@ -1,9 +1,10 @@
 #ifdef BOARD_HALMET
 #ifdef NAVLINK_BLE_ENABLED
-#include "GwNavlinkBLETask.h"
+#include "GwHalmetNavlinkBLETask.h"
 #include "GwApi.h"
 #include <WiFi.h>
 #include <esp_wifi.h>
+#include <Preferences.h>
 
 #include <NimBLEDevice.h>
 
@@ -19,7 +20,13 @@
 #define CHARACTERISTIC_UUID "ABF2"
 #define BLE_DEVICE_NAME     "NAVLinkBlue-1234"
 
+// Hardware pins
+#define MODE_BUTTON_PIN 0   // GPIO 0, active LOW
+#define MODE_LED_PIN 2      // GPIO 2, onboard blue LED
+
 static GwApi* g_api = nullptr;
+static Preferences g_prefs;
+static bool g_bleModeEnabled = true;  // BLE enabled by default
 static NimBLEServer *g_pServer = nullptr;
 static NimBLEAdvertising *g_pAdvertising = nullptr;
 static NimBLECharacteristic *g_pCharacteristic = nullptr;
@@ -39,6 +46,100 @@ static unsigned long g_lastWifiActivity = 0;  // Track actual web activity
 
 // Forward declaration for BLE initialization
 void initializeBLE(GwApi* api);
+
+// Load BLE mode preference from NVS
+bool loadBLEMode() {
+    if (!g_prefs.begin("navlink", true)) {  // read-only
+        return true;  // default to enabled
+    }
+    bool enabled = g_prefs.getBool("ble_en", true);
+    g_prefs.end();
+    return enabled;
+}
+
+// Save BLE mode preference to NVS
+void saveBLEMode(bool enabled) {
+    if (!g_prefs.begin("navlink", false)) {  // read-write
+        return;
+    }
+    g_prefs.putBool("ble_en", enabled);
+    g_prefs.end();
+}
+
+// Check button and toggle mode if long press detected
+void checkModeButton() {
+    static unsigned long pressStart = 0;
+    static bool wasPressed = false;
+    
+    bool isPressed = (digitalRead(MODE_BUTTON_PIN) == LOW);
+    
+    if (isPressed && !wasPressed) {
+        // Button just pressed
+        pressStart = millis();
+        wasPressed = true;
+    } else if (!isPressed && wasPressed) {
+        // Button released
+        unsigned long pressDuration = millis() - pressStart;
+        if (pressDuration >= 3000) {  // 3 second long press
+            // Toggle BLE mode
+            g_bleModeEnabled = !g_bleModeEnabled;
+            saveBLEMode(g_bleModeEnabled);
+            
+            if (g_api) {
+                g_api->getLogger()->logDebug(GwLog::LOG, "BLE mode: %s - REBOOTING", 
+                                            g_bleModeEnabled ? "ENABLED" : "DISABLED");
+            }
+            
+            // Blink LED rapidly to indicate mode change
+            for (int i = 0; i < 10; i++) {
+                digitalWrite(MODE_LED_PIN, HIGH);
+                delay(100);
+                digitalWrite(MODE_LED_PIN, LOW);
+                delay(100);
+            }
+            
+            // Reboot to apply new mode
+            delay(1000);
+            ESP.restart();
+        }
+        wasPressed = false;
+    }
+}
+
+// Update LED to indicate current state
+void updateModeLED() {
+    static unsigned long lastBlink = 0;
+    static bool ledState = false;
+    
+    if (!g_bleModeEnabled) {
+        // WiFi-only mode: LED solid ON
+        digitalWrite(MODE_LED_PIN, HIGH);
+    } else {
+        // BLE mode enabled - show actual radio state
+        switch (g_radioState) {
+            case WIFI_ACTIVE:
+                // WiFi active, BLE deinitialized: LED solid ON
+                digitalWrite(MODE_LED_PIN, HIGH);
+                break;
+            case BLE_ACTIVE:
+                // BLE has connection: Fast blink (5 Hz)
+                if (millis() - lastBlink > 100) {
+                    ledState = !ledState;
+                    digitalWrite(MODE_LED_PIN, ledState ? HIGH : LOW);
+                    lastBlink = millis();
+                }
+                break;
+            case BOTH_STANDBY:
+                // Standby, BLE advertising: Slow blink (1 Hz)
+                if (millis() - lastBlink > 500) {
+                    ledState = !ledState;
+                    digitalWrite(MODE_LED_PIN, ledState ? HIGH : LOW);
+                    lastBlink = millis();
+                }
+                break;
+        }
+    }
+}
 
 // Transition to new state with resource management
 void transitionToState(RadioState newState) {
@@ -216,8 +317,8 @@ void updateRadioState() {
             }
             // Initialize BLE lazily only when staying in BOTH_STANDBY
             // This avoids initializing BLE if WiFi connects immediately at boot
-            else if (!g_bleInitialized && !wifiHasActivity) {
-                if (g_api) g_api->getLogger()->logDebug(GwLog::LOG, "Lazy init BLE (no WiFi)");
+            else if (!g_bleInitialized && !wifiHasActivity && g_bleModeEnabled) {
+                if (g_api) g_api->getLogger()->logDebug(GwLog::LOG, "Lazy init BLE");
                 initializeBLE(g_api);
             }
             break;
@@ -318,6 +419,17 @@ void navlinkBLETask(GwApi *api)
 {
     g_api = api;
     
+    // Setup hardware pins
+    pinMode(MODE_BUTTON_PIN, INPUT_PULLUP);  // Button with internal pullup
+    pinMode(MODE_LED_PIN, OUTPUT);
+    digitalWrite(MODE_LED_PIN, LOW);
+    
+    // Load BLE mode preference
+    g_bleModeEnabled = loadBLEMode();
+    
+    api->getLogger()->logDebug(GwLog::LOG, "NavLink mode: %s", 
+                               g_bleModeEnabled ? "BLE+WiFi" : "WiFi-only");
+    
     // Wait for WiFi to initialize
     int retries = 0;
     while (WiFi.status() != WL_CONNECTED && retries < 50)
@@ -326,49 +438,66 @@ void navlinkBLETask(GwApi *api)
         retries++;
     }
 
-    api->getLogger()->logDebug(GwLog::LOG, "Dual-radio init, heap: %u", xPortGetFreeHeapSize());
+    api->getLogger()->logDebug(GwLog::LOG, "Radio init, heap: %u", xPortGetFreeHeapSize());
     
-    // Configure WiFi AP to detect disconnected stations quickly
-    // Default is 300 seconds (5 minutes), set to 10 seconds for faster state transitions
-    esp_err_t err = esp_wifi_set_inactive_time(WIFI_IF_AP, 10);
-    if (err) {
-        api->getLogger()->logDebug(GwLog::ERROR, "Failed to set AP inactive timeout: %d", (int)err);
+    esp_wifi_set_inactive_time(WIFI_IF_AP, 10);
+    
+    if (g_bleModeEnabled) {
+        api->getLogger()->logDebug(GwLog::LOG, "BLE mode active");
     } else {
-        api->getLogger()->logDebug(GwLog::DEBUG, "AP inactive timeout set to 10 seconds");
+        api->getLogger()->logDebug(GwLog::LOG, "WiFi-only mode (hold button 3s to toggle)");
     }
     
-    // Don't initialize BLE at boot - let state machine do it only when needed
-    // If WiFi is active, BLE will never initialize (saves heap)
-    // If no WiFi activity, BLE will initialize on first transition to BOTH_STANDBY
     api->getLogger()->logDebug(GwLog::LOG, "Boot complete, heap: %u", xPortGetFreeHeapSize());
 
     // Main loop with state machine
     static int counter = 0;
-    static tN2kMsg testMsg2;  // Allocate once, make static
+    static tN2kMsg testMsg2;
     static size_t minHeap = xPortGetFreeHeapSize();
     
     while (true)
     {
-        delay(2000); // Check every 2 seconds
+        delay(2000);
         counter++;
         
-        // Update state machine based on connection status
-        updateRadioState();
+        // Check mode button for long press
+        checkModeButton();
+        
+        // Update LED indicator
+        updateModeLED();
+        
+        // Update state machine based on connection status (only if BLE enabled)
+        if (g_bleModeEnabled) {
+            updateRadioState();
+        }
         
         size_t currentHeap = xPortGetFreeHeapSize();
         if (currentHeap < minHeap) minHeap = currentHeap;
         
         // Detailed status every 15 iterations (30 seconds)
         if (counter % 15 == 0) {
-            static const char* stateNames[] = {"STANDBY", "WIFI", "BLE"};
-            
-            api->getLogger()->logDebug(GwLog::LOG, 
-                "%s W:%d B:%d H:%u (min:%u)", 
-                stateNames[g_radioState],
-                WiFi.softAPgetStationNum(),
-                (g_pServer ? g_pServer->getConnectedCount() : 0),
-                currentHeap, 
-                minHeap);
+            if (g_bleModeEnabled) {
+                static const char* stateNames[] = {"STANDBY", "WIFI", "BLE"};
+                const char* wifiMode = (WiFi.status() == WL_CONNECTED) ? "Client" : 
+                                      (WiFi.softAPgetStationNum() > 0) ? "AP" : "None";
+                api->getLogger()->logDebug(GwLog::LOG, 
+                    "%s WiFi:%s(%d) BLE:%d H:%u (min:%u)", 
+                    stateNames[g_radioState],
+                    wifiMode,
+                    WiFi.softAPgetStationNum(),
+                    (g_pServer ? g_pServer->getConnectedCount() : 0),
+                    currentHeap, 
+                    minHeap);
+            } else {
+                const char* wifiMode = (WiFi.status() == WL_CONNECTED) ? "Client" : 
+                                      (WiFi.softAPgetStationNum() > 0) ? "AP" : "None";
+                api->getLogger()->logDebug(GwLog::LOG, 
+                    "WiFi-only Mode:%s(%d) H:%u (min:%u)", 
+                    wifiMode,
+                    WiFi.softAPgetStationNum(),
+                    currentHeap, 
+                    minHeap);
+            }
             
             // Send test NMEA2000 message
             SetN2kTemperatureExt(testMsg2, 0, 1, N2kts_SeaTemperature, CToKelvin(25.5));
@@ -382,10 +511,10 @@ NavLinkChannelImpl *navLinkImpl = nullptr;
 
 void navlinkBLEInit(GwApi *api)
 {
-    // Stack size reduced to 5000 - optimized for BLE operations
-    api->addUserTask(navlinkBLETask, "navlinkBLETask", 6000);
-
     GwLog *logger = api->getLogger();
+    logger->logDebug(GwLog::LOG, "=== NavLink Init ===");
+    
+    api->addUserTask(navlinkBLETask, "navlinkBLETask", 6000);
 
     // Create NavLink channel
     navLinkImpl = new NavLinkChannelImpl(logger);
@@ -397,9 +526,8 @@ void navlinkBLEInit(GwApi *api)
     
     extern GwChannelList channels;
     channels.addChannel(channel);
-
-
-
+    
+    logger->logDebug(GwLog::LOG, "=== NavLink BLE Init Complete ===");
 }
 #endif // BOARD_HALMET
 #endif // NAVLINK_BLE_ENABLED

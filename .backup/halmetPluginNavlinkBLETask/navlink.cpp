@@ -1,3 +1,6 @@
+#ifdef BOARD_HALMET
+#ifdef NAVLINK_BLE_ENABLED
+
 #include "GwApi.h"
 #include "N2kMsg.h"
 #include "ActisenseReader.h"
@@ -132,3 +135,6 @@ public:
         return size;
     }
 };
+
+#endif //NAVLINK_BLE_ENABLED
+#endif // BOARD_HALMET

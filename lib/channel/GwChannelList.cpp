@@ -486,6 +486,7 @@ void GwChannelList::begin(bool fallbackSerial){
     }
     //TCP server
     sockets=new GwSocketServer(config,logger,MIN_TCP_CHANNEL_ID);
+    // Stop these to reduce resources NO_WIFI
     sockets->begin();
     addChannel(createChannel(logger,config,MIN_TCP_CHANNEL_ID,sockets));
 
@@ -508,6 +509,7 @@ void GwChannelList::begin(bool fallbackSerial){
     //tcp client
     bool tclEnabled=config->getBool(config->tclEnabled);
     if (tclEnabled){
+        // Disable this to reduce resource usage
         client=new GwTcpClient(logger);
         client->begin(TCP_CLIENT_CHANNEL_ID,
             config->getString(config->remoteAddress),
@@ -519,15 +521,15 @@ void GwChannelList::begin(bool fallbackSerial){
 
     //udp writer
     if (config->getBool(GwConfigDefinitions::udpwEnabled)){
-        GwUdpWriter *writer=new GwUdpWriter(config,logger,UDPW_CHANNEL_ID);
-        writer->begin();
-        addChannel(createChannel(logger,config,UDPW_CHANNEL_ID,writer));
+        // GwUdpWriter *writer=new GwUdpWriter(config,logger,UDPW_CHANNEL_ID);
+        // writer->begin();
+        // addChannel(createChannel(logger,config,UDPW_CHANNEL_ID,writer));
     }
     //udp reader
     if (config->getBool(GwConfigDefinitions::udprEnabled)){
-        GwUdpReader *reader=new GwUdpReader(config,logger,UDPR_CHANNEL_ID);
-        reader->begin();
-        addChannel(createChannel(logger,config,UDPR_CHANNEL_ID,reader));
+        // GwUdpReader *reader=new GwUdpReader(config,logger,UDPR_CHANNEL_ID);
+        // reader->begin();
+        // addChannel(createChannel(logger,config,UDPR_CHANNEL_ID,reader));
     }
     logger->flush();
 }

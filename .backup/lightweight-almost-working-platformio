@@ -1,0 +1,130 @@
+[platformio]
+
+# Include sensor task configurations that extend halmet
+extra_configs = 
+	lib/halmet*/platformio.ini
+
+build_cache_dir= ./.pio/build_cache/halmet
+
+default_envs = halmet
+
+[env:halmet]
+
+; platform = espressif32
+platform = https://github.com/pioarduino/platform-espressif32.git#54.03.21-2
+framework = arduino
+board = esp32dev
+
+; Library dependency finder settings
+; lib_ldf_mode = deep+
+; lib_compat_mode = strict
+
+
+lib_deps = 
+    Networking
+    ${basedeps.lib_deps}
+    ; TODO Might need to override the basedeps with these new forks for networking
+    ; mathieucarbou/AsyncTCP @ ^3.2.14
+	; mathieucarbou/ESPAsyncWebServer @ ^3.3.23
+    ; list extra deps here
+; lib_ignore = 
+    ; ledtask
+    ; buttontask
+
+custom_component_remove =
+    espressif/cbor
+    espressif/esp-dsp
+    espressif/esp-modbus
+    espressif/esp-serial-flasher
+    espressif/esp-zboss-lib
+    espressif/esp-zigbee-lib
+    espressif/esp_diag_data_store
+    espressif/esp_diagnostics
+    espressif/esp_insights
+    espressif/esp_modem
+    espressif/esp_rainmaker
+    espressif/esp_rcp_update
+    espressif/esp_schedule
+    espressif/esp_secure_cert_mgr
+    espressif/cmake_utilities
+    espressif/fb_gfx
+    espressif/jsmn
+    espressif/json_generator
+    espressif/json_parser
+    espressif/lan867x
+    espressif/lan86xx_common
+    espressif/libsodium
+    chmorgan/esp-libhelix-mp3
+    espressif/fb_gfx
+    espressif/network_provisioning
+    espressif/qrcode
+    espressif/rmaker_common
+    joltwallet/littlefs
+
+
+custom_sdkconfig =
+    CONFIG_BT_ENABLED=y
+    CONFIG_BT_BLE_ENABLED=y
+    CONFIG_BTDM_CTRL_MODE_BLE_ONLY=y
+    CONFIG_BTDM_CTRL_MODE_BR_EDR_ONLY=n
+    CONFIG_BTDM_CTRL_MODE_BTDM=n
+    CONFIG_BT_BLUEDROID_ENABLED=n
+    CONFIG_BT_NIMBLE_ENABLED=y
+    ; CONFIG_ENABLE_CHIP_SHELL=n
+    ; CONFIG_NEWLIB_NANO_FORMAT=y
+    ; CONFIG_NIMBLE_MAX_CONNECTIONS=1
+    ; ONFIG_BT_NIMBLE_MAX_CONNECTIONS=1
+    ; CONFIG_BT_NIMBLE_ROLE_CENTRAL=n
+    ; CONFIG_BT_NIMBLE_ROLE_OBSERVER=n
+    ; CONFIG_BT_NIMBLE_MAX_BONDS=2
+    ; CONFIG_BT_NIMBLE_MAX_CCCDS=2
+    ; CONFIG_BT_NIMBLE_SECURITY_ENABLE=n
+    ; CONFIG_BT_NIMBLE_50_FEATURE_SUPPORT=n
+    ; CONFIG_BT_NIMBLE_WHITELIST_SIZE=1
+    ; CONFIG_BT_NIMBLE_GATT_MAX_PROCS=1
+    ; CONFIG_BT_NIMBLE_MSYS_1_BLOCK_COUNT=10
+    ; CONFIG_BT_NIMBLE_MSYS_1_BLOCK_SIZE=100
+    ; CONFIG_BT_NIMBLE_MSYS_2_BLOCK_COUNT=4
+    ; CONFIG_BT_NIMBLE_MSYS_2_BLOCK_SIZE=320
+    ; CONFIG_BT_NIMBLE_ACL_BUF_COUNT=5
+    ; CONFIG_BT_NIMBLE_HCI_EVT_HI_BUF_COUNT=5
+    ; CONFIG_BT_NIMBLE_HCI_EVT_LO_BUF_COUNT=3
+    ; CONFIG_BT_NIMBLE_ENABLE_CONN_REATTEMPT=n
+    ; CONFIG_ESP_SYSTEM_EVENT_QUEUE_SIZE=16
+    ; CONFIG_ESP_SYSTEM_EVENT_TASK_STACK_SIZE=2048
+    ; CONFIG_MAX_EVENT_QUEUE_SIZE=20
+    ; CONFIG_BT_CTRL_RUN_IN_FLASH_ONLY=y
+    ; CONFIG_FREERTOS_PLACE_FUNCTIONS_INTO_FLASH=y
+    ; CONFIG_SPI_FLASH_ROM_IMPL=y
+    ; CONFIG_SPI_MASTER_ISR_IN_IRAM=n
+    ; CONFIG_SPI_SLAVE_ISR_IN_IRAM=n
+    ; CONFIG_HEAP_PLACE_FUNCTION_INTO_FLASH=y
+    ; CONFIG_ESP_MAIN_TASK_STACK_SIZE=3072
+    ; CONFIG_ESP_TIMER_TASK_STACK_SIZE=2048
+    ; CONFIG_CHIP_TASK_STACK_SIZE=6144
+
+build_flags=
+    -D BOARD_HALMET
+    ; -D IDF_COMPONENT_MANAGER=0
+    ${env.build_flags}
+
+    -D CONFIG_ETH_ENABLED
+    -D SOC_WIFI_SUPPORTED=1
+
+    ; Fix mbedtls API changes in ESP-IDF 5.x (needed by ESPAsyncWebServer-esphome)
+    -Dmbedtls_md5_starts_ret=mbedtls_md5_starts
+    -Dmbedtls_md5_update_ret=mbedtls_md5_update
+    -Dmbedtls_md5_finish_ret=mbedtls_md5_finish
+    -Dmbedtls_sha1_starts_ret=mbedtls_sha1_starts
+    -Dmbedtls_sha1_update_ret=mbedtls_sha1_update
+    -Dmbedtls_sha1_finish_ret=mbedtls_sha1_finish
+
+    ; Force-include ESP-IDF headers needed by main.cpp
+    ; -include "esp_ota_ops.h" ; This causes <command-line>: fatal error: esp_ota_ops.h: No such file or directory
+    -include "esp_mac.h"
+    ; -include "esp_app_format.h"
+    -include "esp_ota_ops.h"
+    ; -Imanaged_components/espressif__mdns/include
+    ; -I$HOME/.platformio/packages/framework-arduinoespressif32/libraries/Network/src
+    ; FIX  error: invalid conversion from 'const AsyncWebParameter*' to 'AsyncWebParameter*
+    -fpermissive

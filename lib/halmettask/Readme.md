@@ -16,6 +16,9 @@ Victron Task – reads VE.Direct over UART from solar/shunt devices, translates
 
 
 
+It looks like disabling MDNS and GwSocketServer provide just enough free heap to successfully
+run the web server and BLE simultaneously! 
+
 Goals:
 
 
@@ -43,6 +46,7 @@ Goals:
 * Web interface for 
     * firmware update 
         * Setting tank level mapping?
+* Websocket Actisense for streaming to web interface
 * PWM out for backlight (switch indicators) negative?
 * I2C interface to expanded board
     * Reads load states from expander
