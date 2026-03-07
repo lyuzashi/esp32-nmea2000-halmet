@@ -42,7 +42,7 @@ void halmetTask(GwApi *api)
 
     delay(5000);
 
-
+/*
     // 1. Initialize the Device with minimal settings
     NimBLEDevice::init("NimBLE-ESP32");
     
@@ -81,6 +81,16 @@ void halmetTask(GwApi *api)
            SetN2kDCBatStatus(solarBatteryMsg, 1, 12, 2);
            api->sendN2kMessage(solarBatteryMsg);
     }
+
+*/
+
+
+    while (true)
+    {
+        delay(2000);
+
+    }
+
     vTaskDelete(NULL);
 }
 
@@ -89,11 +99,11 @@ void halmetInit(GwApi *api)
 {
 
 
-    api->getLogger()->logDebug(GwLog::LOG, "halmetInit: scheduling BLE task");
+    // api->getLogger()->logDebug(GwLog::LOG, "halmetInit: scheduling BLE task");
 
 
 
     // Reduced stack from 4096 to 3072 - NimBLE task needs most stack, not this one
-    api->addUserTask(halmetTask, "halmetTask", 3072);
+    api->addUserTask(halmetTask, "halmetTask", 1000);
 }
 #endif

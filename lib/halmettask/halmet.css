@@ -1,3 +1,12 @@
 .examplecss{
     background-color: coral;
 }
+
+.number {
+    font-variant-numeric: tabular-nums;
+}
+
+#tabs .tab {
+    border-bottom: 0;
+    border-radius: 10px 10px 0 0;
+}

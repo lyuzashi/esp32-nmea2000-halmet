@@ -1,0 +1,10 @@
+[
+  {
+        "name": "navlinkEnable",
+        "label": "Enable Navlink BLE",
+        "type": "boolean",
+        "default": "false",
+        "description": "switch on Navlink BLE support",
+        "category": "navlinkble"
+    }
+]
