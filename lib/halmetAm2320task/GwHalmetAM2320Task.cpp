@@ -4,9 +4,11 @@
  * Simple implementation - reads sensor, sends N2K message.
  */
 #include "GwHalmetAM2320task.h"
+#include "GwHardware.h"  // Defines _GWIIC when GWIIC_SCL is set
 
 #ifdef BOARD_HALMET
 #ifdef AM2320_ENABLED
+#ifdef _GWIIC
 
 #include "GwHalmetSensor.h"
 #include "GwApi.h"
@@ -91,5 +93,6 @@ void am2320TaskInit(GwApi *api) {
 
 DECLARE_INITFUNCTION(am2320TaskInit);
 
+#endif  // _GWIIC
 #endif  // AM2320_ENABLED
 #endif  // BOARD_HALMET

@@ -7,6 +7,7 @@
  * - Sensors handle their own N2K message sending
  */
 #include "GwIicTask.h"
+#include "GwHardware.h"  // Defines _GWIIC when GWIIC_SCL is set
 
 #ifdef BOARD_HALMET
 #ifdef _GWIIC
@@ -128,7 +129,7 @@ static void runIicTask(GwApi *api) {
 #else  // _GWIIC not defined
 
 void initIicTask(GwApi *api) {
-    api->getLogger()->logDebug(GwLog::DEBUG, "IIC disabled");
+    api->getLogger()->logDebug(GwLog::DEBUG, "IIC disabled (no pins configured)");
 }
 
 #endif  // _GWIIC

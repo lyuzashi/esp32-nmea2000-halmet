@@ -5,6 +5,7 @@
 #include "N2kMsg.h"
 #include "ActisenseReader.h"
 #include <base64.h>
+#include <functional>
 #include "GwChannelInterface.h"
 #include <NimBLECharacteristic.h>
 
@@ -59,16 +60,19 @@ public:
     }
 };
 
+// Callback type for sending formatted NavLink messages
+using NavLinkCallback = std::function<void(const char* msg, size_t len)>;
+
 class NavLinkChannelImpl : public GwChannelInterface {
 private:
     CircularBufferStream *stream;
     tActisenseReader reader;
-    GwLog *logger;
     unsigned long messageCount = 0;
     NimBLECharacteristic *bleCharacteristic = nullptr;
+    NavLinkCallback onMessage;
     
 public:
-    NavLinkChannelImpl(GwLog *logger) : logger(logger) {
+    NavLinkChannelImpl(NavLinkCallback callback) : onMessage(callback) {
         stream = new CircularBufferStream();
         reader.SetReadStream(stream);
     }
@@ -102,12 +106,8 @@ public:
                 timer, base64Buf
             );
             
-            // Send to BLE if connected
-            if (bleCharacteristic != nullptr) {
-                int len = strlen(navLinkMsg);
-                bleCharacteristic->setValue((uint8_t*)navLinkMsg, len);
-                bleCharacteristic->notify();
-            }
+            onMessage(navLinkMsg, strlen(navLinkMsg));
+
         }
     }
 
