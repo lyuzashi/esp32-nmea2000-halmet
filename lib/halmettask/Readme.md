@@ -22,12 +22,14 @@ run the web server and BLE simultaneously!
 Goals:
 
 
-* NMEA CAN bus 
+✅ NMEA CAN bus 
     * connects to instrument network and provides read/write of PGN
-* BLE serial over characteristic 
+✅ BLE serial over characteristic 
     * Transmit/receive raw binary NMEA messages with base64 encoding 
     *  Match Navlink Blue published format 
-* Victron solar charger interface over digital in
+✅  BLE receive
+✅  WS ~HTML POST~ endpoint to receive messages
+✅ Victron solar charger interface over digital in
     * Isolated digital input pin mapped to internal UART
     * Reads solar charge data
     * Writes DC charge data to NMEA
@@ -39,22 +41,36 @@ Goals:
     * Isolated input supports 12v
     * Connect to bilge pumps manual wire
     * Power to input triggers NMEA bilge alarm
-* Analogue inputs
+➡️ Analogue inputs
     * Tank level sender analogue in (via I2C chip)
     * Maps resistance to level for water/fuel
     * Writes level data to NMEA
-* Web interface for 
-    * firmware update 
-        * Setting tank level mapping?
-* Websocket Actisense for streaming to web interface
-* PWM out for backlight (switch indicators) negative?
+✅ Web interface for 
+    ✅ firmware update 
+    * Setting tank level mapping?
+    * Individual feature switches
+    * Custom data visualizer / logger from WS
+✅ Websocket or SSE Actisense for streaming to web interface
+    * Filtering of PGNs to allow for subscribing to all, none or specific messages based on what is displayed
+* ~PWM out for backlight (switch indicators) negative?~
 * I2C interface to expanded board
     * Reads load states from expander
     * Writes binary status to NMEA
     * Responds to binary switch from NMEA
     * Writes outputs to expander 
+    > standard NMEA 2000 PGN 127501 "Binary Status Report" and PGN 127502 "Binary Switch Control".
+✅ I2C Humidity/Temp/Pressure
+✅ 1-wire temp probes
+    * sea water (in-hull)
+    * oil pan
+    * exhaust water
+    * engine room?
 
 
+Optimisation ideas:
+* Run only one Halmet task which loops through several things, each added by their own "task" runners that don't actually create tasks
+  This would be like how IIC task allows multiple sensors to be added and it loops through them all.
+* One "channel" only – distribute the messages to BLE and SSE in the same looping way
 
 
 

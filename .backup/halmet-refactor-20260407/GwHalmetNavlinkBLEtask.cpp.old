@@ -1,0 +1,146 @@
+#include "GwHalmetNavlinkBLETask.h"
+#include "GwApi.h"
+#include <NimBLEDevice.h>
+#include "GwHalmetStreamChanneltask.h"
+
+#include "N2kMessages.h"
+
+
+#define SERVICE_UUID        "ABF0"
+#define CHARACTERISTIC_UUID "ABF2"
+#define BLE_DEVICE_NAME     "NAVLinkBlue-1234"
+
+// Global state for BLE
+static NimBLEServer* g_pServer = nullptr;
+static NimBLECharacteristic* g_pCharacteristic = nullptr;
+static GwLog* g_logger = nullptr;
+static HalmetStreamHandle g_listenerHandle = 0;
+
+// Forward PDGY messages from shared channel to BLE
+static void onStreamMessage(const char* msg, size_t len) {
+    if (g_pCharacteristic && g_pServer && g_pServer->getConnectedCount() > 0) {
+        // Add CRLF for NavLink format
+        char bleMsg[260];
+        int bleLen = snprintf(bleMsg, sizeof(bleMsg), "%s\r\n", msg);
+        g_pCharacteristic->setValue((uint8_t*)bleMsg, bleLen);
+        g_pCharacteristic->notify();
+    }
+}
+
+// Cleanup callback - periodic health check, called from stream task
+static void bleCleanup() {
+    if (g_pServer && g_pServer->getConnectedCount() == 0) {
+        if (!NimBLEDevice::getAdvertising()->isAdvertising()) {
+            if (g_logger) g_logger->logDebug(GwLog::LOG, "BLE advertising stopped, restarting");
+            NimBLEDevice::getAdvertising()->start();
+        }
+    }
+}
+
+// Server callback to handle connection/disconnection events
+class ServerCallbacks: public NimBLEServerCallbacks {
+public:
+    void onConnect(NimBLEServer* pServer, NimBLEConnInfo& connInfo) override {
+        if (g_logger) g_logger->logDebug(GwLog::LOG, "BLE connected, heap=%d", esp_get_free_heap_size());
+        
+        // Register listener when first client connects
+        if (pServer->getConnectedCount() == 1 && g_listenerHandle == 0) {
+            HalmetStreamInterface* iface = getHalmetStreamInterface();
+            if (iface) {
+                g_listenerHandle = iface->addListener("BLE", onStreamMessage);
+                if (g_logger) g_logger->logDebug(GwLog::LOG, "BLE: registered stream listener %d", g_listenerHandle);
+            }
+        }
+    }
+    
+    void onDisconnect(NimBLEServer* pServer, NimBLEConnInfo& connInfo, int reason) override {
+        if (g_logger) g_logger->logDebug(GwLog::LOG, "BLE disconnected (reason=%d), heap=%d", reason, esp_get_free_heap_size());
+        
+        // Unregister listener when no clients
+        if (pServer->getConnectedCount() == 0 && g_listenerHandle != 0) {
+            HalmetStreamInterface* iface = getHalmetStreamInterface();
+            if (iface) {
+                iface->removeListener(g_listenerHandle);
+                if (g_logger) g_logger->logDebug(GwLog::LOG, "BLE: unregistered stream listener");
+            }
+            g_listenerHandle = 0;
+        }
+    } 
+};
+
+// Initialize BLE stack
+static bool initializeBLE() {
+    if (g_logger) g_logger->logDebug(GwLog::LOG, "Init BLE");
+    
+    NimBLEDevice::init("");
+    NimBLEDevice::setPower(ESP_PWR_LVL_P9);
+    NimBLEDevice::setSecurityAuth(false, false, false);
+
+    g_pServer = NimBLEDevice::createServer();
+    if (!g_pServer) {
+        if (g_logger) g_logger->logDebug(GwLog::ERROR, "BLE createServer() failed!");
+        return false;
+    }
+    g_pServer->advertiseOnDisconnect(true);
+    g_pServer->setCallbacks(new ServerCallbacks());
+    
+    NimBLEService *pService = g_pServer->createService(SERVICE_UUID);
+    if (!pService) {
+        if (g_logger) g_logger->logDebug(GwLog::ERROR, "BLE createService() failed!");
+        return false;
+    }
+    
+    g_pCharacteristic = pService->createCharacteristic(
+        CHARACTERISTIC_UUID,
+        NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::NOTIFY
+    );
+    
+    pService->start();
+    return true;
+}
+
+static void startAdvertising() {
+    NimBLEAdvertising* pAdvertising = NimBLEDevice::getAdvertising();
+    if (!pAdvertising) {
+        if (g_logger) g_logger->logDebug(GwLog::ERROR, "BLE getAdvertising() returned null!");
+        return;
+    }
+    pAdvertising->addServiceUUID(SERVICE_UUID);
+    
+    NimBLEAdvertisementData advertisementData;
+    advertisementData.setName(BLE_DEVICE_NAME);
+    advertisementData.setCompleteServices(NimBLEUUID(SERVICE_UUID));
+    pAdvertising->setAdvertisementData(advertisementData);
+    
+    NimBLEAdvertisementData scanResponseData;
+    scanResponseData.setName(BLE_DEVICE_NAME);
+    pAdvertising->setScanResponseData(scanResponseData);
+    pAdvertising->start();
+}
+
+void navlinkBLEInit(GwApi *api)
+{
+    g_logger = api->getLogger();
+    
+    bool enabled = api->getConfig()->getConfigItem(api->getConfig()->navlinkEnable, true)->asBoolean();
+    if (!enabled) {
+        esp_bt_controller_disable();
+        esp_bt_controller_deinit();
+        esp_bt_controller_mem_release(ESP_BT_MODE_BLE);
+        return;
+    }
+    
+    if (!initializeBLE()) {
+        g_logger->logDebug(GwLog::ERROR, "BLE init failed");
+        return;
+    }
+    
+    startAdvertising();
+    g_logger->logDebug(GwLog::LOG, "BLE initialized and advertising");
+    
+    // Register cleanup callback with shared stream channel
+    HalmetStreamInterface* iface = getHalmetStreamInterface();
+    if (iface) {
+        iface->addCleanupCallback(bleCleanup);
+    }
+}

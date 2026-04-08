@@ -3,38 +3,19 @@
 
 #include <Arduino.h>
 #include "VeDirectFrameHandler.h"
-#include <map>
-#include <functional>
-
-// Forward declaration
-class GwApi;
 
 /**
- * Helper class to provide efficient name-based lookups for VeDirectFrameHandler data
- * Uses a map to cache index positions for O(log n) lookup instead of O(n) linear search
+ * Helper class for name-based lookups in VeDirectFrameHandler data.
+ * Uses simple linear search - efficient for VE.Direct's small dataset (~20 fields max).
+ * Zero heap allocation.
  */
 class VeDirectHelper {
 private:
     VeDirectFrameHandler* handler;
-    std::map<String, int> nameToIndexMap;
-    int lastKnownCount;
-    
-    // Update the map when new data arrives
-    void updateMap() {
-        if (handler->veEnd != lastKnownCount) {
-            nameToIndexMap.clear();
-            for (int i = 0; i < handler->veEnd; i++) {
-                if (handler->veData[i].veName[0] != '\0') {
-                    nameToIndexMap[String(handler->veData[i].veName)] = i;
-                }
-            }
-            lastKnownCount = handler->veEnd;
-        }
-    }
 
 public:
     VeDirectHelper(VeDirectFrameHandler* veHandler) 
-        : handler(veHandler), lastKnownCount(0) {
+        : handler(veHandler) {
     }
     
     /**
@@ -42,10 +23,10 @@ public:
      * Call this after rxData() has processed incoming data
      */
     const char* getValue(const char* name) {
-        updateMap();
-        auto it = nameToIndexMap.find(String(name));
-        if (it != nameToIndexMap.end()) {
-            return handler->veData[it->second].veValue;
+        for (int i = 0; i < handler->veEnd; i++) {
+            if (strcmp(handler->veData[i].veName, name) == 0) {
+                return handler->veData[i].veValue;
+            }
         }
         return nullptr;
     }
@@ -76,8 +57,7 @@ public:
      * Check if a specific field exists
      */
     bool hasValue(const char* name) {
-        updateMap();
-        return nameToIndexMap.find(String(name)) != nameToIndexMap.end();
+        return getValue(name) != nullptr;
     }
 };
 

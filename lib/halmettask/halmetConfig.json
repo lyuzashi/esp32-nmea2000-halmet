@@ -1,29 +1,3 @@
 [
-    {
-        "name": "halCurrTxdr",
-        "label": "Solar MPPT Battery Current Transducer Name",
-        "type": "String",
-        "default": "HALMET_I",
-        "description": "XDR transducer name for Halmet current readings",
-        "category": "halmet"
-    },
-    {
-        "name": "halVoltTxdr",
-        "label": "Solar MPPT Battery Voltage Transducer Name",
-        "type": "String",
-        "default": "HALMET_V",
-        "description": "XDR transducer name for Halmet voltage readings",
-        "category": "halmet"
-    },
-    {
-        "name": "halVoltInst",
-        "label": "Solar MPPT Battery Instance ID",
-        "type": "number",
-        "default": 1,
-        "description": "N2K instance ID for Victron Solar controller readings",
-        "category": "halmet",
-        "min": 0,
-        "max": 255,
-        "check": "checkMinMax"
-    }
+
 ]

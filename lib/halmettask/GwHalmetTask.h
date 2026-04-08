@@ -1,5 +1,8 @@
 #pragma once
 #include "GwApi.h"
+#include "hardware.h"
+#include <functional>
+
 //we only compile for some boards
 #ifdef BOARD_HALMET
 //we could add the following defines also in our local platformio.ini
@@ -8,18 +11,25 @@
 //RS485 on groove
 // #define SERIAL_GROOVE_485
 
+/**
+ * Micro-task callback type.
+ * Small periodic functions that run in the halmetTask loop.
+ */
+using HalmetMicroTask = std::function<void()>;
 
-#define USBSerial Serial
-
-// from HALMET
-// CAN bus (NMEA 2000) pins on HALMET
-// const gpio_num_t kCANRxPin = GPIO_NUM_18;
-// const gpio_num_t kCANTxPin = GPIO_NUM_19;
-
-
-#define ESP32_CAN_RX_PIN GPIO_NUM_18
-#define ESP32_CAN_TX_PIN GPIO_NUM_19
-#define DIGITAL_INPUT_1 GPIO_NUM_23
+/**
+ * Register a micro-task to be executed periodically by halmetTask.
+ * 
+ * Tasks are executed sequentially with delays between them.
+ * Total cycle time is fixed (default 5s), so delay between tasks
+ * is dynamically calculated: cycleTime / taskCount.
+ * 
+ * Call this during init phase (before task starts).
+ * 
+ * @param name  Task name for logging
+ * @param task  Function to execute periodically
+ */
+void halmetRegisterMicroTask(const char* name, HalmetMicroTask task);
 
 void halmetInit(GwApi *api);
 void halmetTask(GwApi *api);

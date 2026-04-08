@@ -7,7 +7,6 @@
 
 void am2320TaskInit(GwApi *api);
 
-// Declare this as a user init function
 DECLARE_INITFUNCTION(am2320TaskInit);
 
 #endif  // AM2320_ENABLED

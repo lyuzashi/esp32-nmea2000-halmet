@@ -18,6 +18,9 @@
 #include "GwApi.h"
 #include <Wire.h>
 
+#include "freertos/task.h"
+
+
 // I2C pins - set via build_flags: -D GWIIC_SDA=21 -D GWIIC_SCL=22
 #ifndef GWIIC_SDA
     #define GWIIC_SDA -1
@@ -62,7 +65,7 @@ void initIicTask(GwApi *api) {
     }
     
     LOG_DEBUG(GwLog::LOG, "Starting IIC task with %d sensor(s)", sensorData.sensors.size());
-    api->addUserTask(runIicTask, "iicTask", 4000);
+    api->addUserTask(runIicTask, "iicTask", 3072);
 }
 
 static void runIicTask(GwApi *api) {
@@ -118,6 +121,11 @@ static void runIicTask(GwApi *api) {
         vTaskDelete(NULL);
         return;
     }
+    
+    // Stack monitoring
+    timers.addAction(10000, [logger]() {
+        LOG_DEBUG(GwLog::DEBUG, "IicTask stack high water: %u bytes", uxTaskGetStackHighWaterMark(NULL));
+    });
     
     // Polling loop
     while (true) {

@@ -1,0 +1,35 @@
+[
+    {
+        "name": "BME280iid",
+        "label": "BME280 Instance ID",
+        "type": "number",
+        "default": "99",
+        "description": "NMEA2000 instance ID for BME280 sensor messages",
+        "category": "sensors",
+        "capabilities": {
+            "halmet": "true"
+        }
+    },
+    {
+        "name": "BME280intv",
+        "label": "BME280 Interval (s)",
+        "type": "number",
+        "default": "10",
+        "description": "Measurement interval in seconds",
+        "category": "sensors",
+        "capabilities": {
+            "halmet": "true"
+        }
+    },
+    {
+        "name": "BME280toff",
+        "label": "BME280 Temp Offset",
+        "type": "number",
+        "default": "0",
+        "description": "Temperature calibration offset in °C (e.g. -2.5 to subtract 2.5 degrees)",
+        "category": "sensors",
+        "capabilities": {
+            "halmet": "true"
+        }
+    }
+]

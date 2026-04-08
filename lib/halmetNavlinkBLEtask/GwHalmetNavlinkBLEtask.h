@@ -5,10 +5,9 @@
 #include "GwApi.h"
 
 void navlinkBLEInit(GwApi *api);
-void navlinkBLETask(GwApi *api);
 
-
-DECLARE_INITFUNCTION(navlinkBLEInit);
+// Init after StreamChannel (200 > 100)
+DECLARE_INITFUNCTION_ORDER(navlinkBLEInit, 200);
 
 #endif // NAVLINK_BLE_ENABLED
 #endif // BOARD_HALMET

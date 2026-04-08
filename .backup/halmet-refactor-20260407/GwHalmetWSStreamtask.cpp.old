@@ -1,0 +1,139 @@
+/**
+ * WebSocket Stream for Halmet
+ * 
+ * Streams NMEA2000 messages via WebSocket in NavLink Blue format.
+ * Uses shared HalmetStreamChannel - no dedicated task needed.
+ * 
+ * Endpoint: /ws
+ */
+#include "GwHalmetWSStreamtask.h"
+
+#ifdef BOARD_HALMET
+#ifdef WS_STREAM_ENABLED
+
+#include "GwApi.h"
+#include "GwWebServer.h"
+#include "GwHalmetStreamChanneltask.h"
+#include <ESPAsyncWebServer.h>
+
+extern GwWebServer webserver;
+
+static AsyncWebSocket* g_ws = nullptr;
+static GwLog* g_logger = nullptr;
+static HalmetStreamHandle g_listenerHandle = 0;
+
+// Forward messages from shared channel to WebSocket
+static void onStreamMessage(const char* msg, size_t len) {
+    if (g_ws && g_ws->count() > 0) {
+        g_ws->textAll(msg, len);
+    }
+}
+
+// Cleanup callback - called periodically from stream task
+static void wsCleanup() {
+    if (g_ws) {
+        g_ws->cleanupClients();
+    }
+}
+
+static void onWsEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, 
+               AwsEventType type, void *arg, uint8_t *data, size_t len) {
+    if (type == WS_EVT_CONNECT) {
+        g_logger->logDebug(GwLog::LOG, "WS: client %u connected, total=%d", 
+                          client->id(), g_ws->count());
+        client->text("connected");
+        
+        // Register listener when first client connects
+        if (g_ws->count() == 1 && g_listenerHandle == 0) {
+            HalmetStreamInterface* iface = getHalmetStreamInterface();
+            g_logger->logDebug(GwLog::LOG, "WS: getHalmetStreamInterface()=%p", iface);
+            if (iface) {
+                g_listenerHandle = iface->addListener("WS", onStreamMessage);
+                g_logger->logDebug(GwLog::LOG, "WS: registered stream listener %d", g_listenerHandle);
+            } else {
+                g_logger->logDebug(GwLog::ERROR, "WS: stream interface not available!");
+            }
+        }
+    } else if (type == WS_EVT_DISCONNECT) {
+        g_logger->logDebug(GwLog::LOG, "WS: client %u disconnected", client->id());
+        
+        // Unregister listener when no clients
+        if (g_ws->count() == 0 && g_listenerHandle != 0) {
+            HalmetStreamInterface* iface = getHalmetStreamInterface();
+            if (iface) {
+                iface->removeListener(g_listenerHandle);
+                g_logger->logDebug(GwLog::LOG, "WS: unregistered stream listener");
+            }
+            g_listenerHandle = 0;
+        }
+    } else if (type == WS_EVT_DATA) {
+        // Handle incoming PDGY messages from WebSocket clients
+        // 
+        // NOTE ON ECHO BEHAVIOR:
+        // When WS client A sends a message:
+        //   1. dispatchToListenersExcept(fromHandle=WS) → BLE clients receive it
+        //   2. handleN2kMessage() → N2K bus, other channels, NMEA0183 conversion
+        //   3. Our Stream channel is skipped (sourceId match prevents echo)
+        // 
+        // This means WS client A's message goes to BLE and N2K, but NOT to other
+        // WS clients (B, C, etc.). To echo to other WS clients, we'd need to
+        // iterate and skip the sender - can be added later if needed.
+        //
+        AwsFrameInfo *info = (AwsFrameInfo*)arg;
+        if (info->final && info->index == 0 && info->len == len && info->opcode == WS_TEXT) {
+            // Null-terminate the data
+            char* pdgyLine = (char*)malloc(len + 1);
+            if (pdgyLine) {
+                memcpy(pdgyLine, data, len);
+                pdgyLine[len] = '\0';
+                
+                // Strip trailing CR/LF if present
+                while (len > 0 && (pdgyLine[len-1] == '\r' || pdgyLine[len-1] == '\n')) {
+                    pdgyLine[--len] = '\0';
+                }
+                
+                // Process only PDGY messages
+                if (strncmp(pdgyLine, "!PDGY,", 6) == 0) {
+                    HalmetStreamInterface* iface = getHalmetStreamInterface();
+                    if (iface) {
+                        if (!iface->processIncoming("WS", pdgyLine, g_listenerHandle)) {
+                            g_logger->logDebug(GwLog::DEBUG, "WS: processIncoming failed for: %s", pdgyLine);
+                        }
+                    }
+                } else {
+                    g_logger->logDebug(GwLog::DEBUG, "WS: ignoring non-PDGY message: %.20s...", pdgyLine);
+                }
+                
+                free(pdgyLine);
+            }
+        }
+    }
+}
+
+void wsStreamInit(GwApi* api) {
+    g_logger = api->getLogger();
+    g_logger->logDebug(GwLog::LOG, "WS Stream: init");
+    
+    // Check if stream interface is available
+    HalmetStreamInterface* iface = getHalmetStreamInterface();
+    g_logger->logDebug(GwLog::LOG, "WS Stream: interface=%p", iface);
+    
+    // Create WebSocket
+    g_ws = new AsyncWebSocket("/ws");
+    g_ws->onEvent(onWsEvent);
+    
+    // Add WebSocket to server
+    AsyncWebServer* server = webserver.getServer();
+    if (server) {
+        server->addHandler(g_ws);
+        g_logger->logDebug(GwLog::LOG, "WS Stream: /ws handler added");
+    }
+    
+    // Register cleanup callback with shared stream channel
+    if (iface) {
+        iface->addCleanupCallback(wsCleanup);
+    }
+}
+
+#endif  // WS_STREAM_ENABLED
+#endif  // BOARD_HALMET

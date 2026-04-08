@@ -1,0 +1,46 @@
+[
+    {
+        "name": "owSeaTempAddr",
+        "label": "Sea Temperature Address",
+        "type": "String",
+        "default": "",
+        "description": "1-Wire device address for sea temperature sensor (16 hex chars, e.g. 28ff1234567890ab). Leave empty to disable.",
+        "category": "1-Wire Sensors",
+        "capabilities": {
+            "halmet": "true"
+        }
+    },
+    {
+        "name": "owEngRoomAddr",
+        "label": "Engine Room Temp Address",
+        "type": "String",
+        "default": "",
+        "description": "1-Wire device address for engine room temperature sensor (16 hex chars). Leave empty to disable.",
+        "category": "1-Wire Sensors",
+        "capabilities": {
+            "halmet": "true"
+        }
+    },
+    {
+        "name": "owEngineOilAddr",
+        "label": "Engine Oil Temp Address",
+        "type": "String",
+        "default": "",
+        "description": "1-Wire device address for engine oil temperature sensor (16 hex chars). Leave empty to disable.",
+        "category": "1-Wire Sensors",
+        "capabilities": {
+            "halmet": "true"
+        }
+    },
+    {
+        "name": "owExhGasAddr",
+        "label": "Exhaust Gas Temp Address",
+        "type": "String",
+        "default": "",
+        "description": "1-Wire device address for exhaust gas temperature sensor (16 hex chars). Leave empty to disable.",
+        "category": "1-Wire Sensors",
+        "capabilities": {
+            "halmet": "true"
+        }
+    }
+]

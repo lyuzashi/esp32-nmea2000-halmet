@@ -68,10 +68,12 @@ public:
         api->increment(counterId, "AM2320temp");
         
         // Send humidity  
-        tN2kMsg msg2;
-        SetN2kHumidity(msg2, 1, iid, humidSource, humidity);
-        api->sendN2kMessage(msg2);
+        SetN2kHumidity(msg, 1, iid, humidSource, humidity);
+        api->sendN2kMessage(msg);
         api->increment(counterId, "AM2320hum");
+
+        SetN2kEnvironmentalParameters(msg, 1, tempSource, tempK, humidSource, humidity, N2kDoubleNA);
+        api->sendN2kMessage(msg);
     }
 };
 
@@ -90,8 +92,6 @@ void am2320TaskInit(GwApi *api) {
     
     LOG_DEBUG(GwLog::LOG, "AM2320: registered");
 }
-
-DECLARE_INITFUNCTION(am2320TaskInit);
 
 #endif  // _GWIIC
 #endif  // AM2320_ENABLED
