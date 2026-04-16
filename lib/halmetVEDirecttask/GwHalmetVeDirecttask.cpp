@@ -1,5 +1,15 @@
+/**
+ * VE.Direct Micro-Task for Halmet
+ * 
+ * Reads Victron MPPT/BMV data via VE.Direct protocol and sends N2K messages.
+ * Non-blocking: processes available serial bytes each micro-task call.
+ * 
+ * Runs as a micro-task (called by halmetTask) rather than a dedicated 
+ * FreeRTOS task, saving ~3KB of stack memory.
+ */
 #include "GwHalmetVeDirecttask.h"
 #include "GwApi.h"
+#include "GwHalmetTask.h"
 
 #include "N2kMessages.h"
 
@@ -8,7 +18,6 @@
 
 #include "hardware.h"
 
-#include "freertos/task.h"
 #include "driver/uart.h"  // For uart_set_pin - allows pin remapping without reallocation
 
 #ifdef VEDIRECT_ENABLED
@@ -32,7 +41,14 @@ static const int NUM_DEVICES = sizeof(deviceConfigs) / sizeof(deviceConfigs[0]);
 static VeDirectFrameHandler frameHandler;
 static VeDirectHelper helper(&frameHandler);
 
-HardwareSerial SerialVE(2); // Use UART2
+static HardwareSerial* g_serialVE = nullptr;
+
+// State (NO api storage - passed to micro-task)
+static int g_currentDevice = 0;
+static unsigned long g_lastSwitchTime = 0;
+static unsigned long g_lastFrameTime = 0;
+static const unsigned long DEVICE_TIMEOUT_MS = 5000;  // Switch device if no frame for 5s
+static const unsigned long MIN_DEVICE_TIME_MS = 3000; // Stay on device at least 3s
 
 // Send N2K messages for current data
 static void sendN2kMessages(GwApi* api, GwLog* logger, uint8_t batteryInstance, const char* name) {
@@ -53,86 +69,90 @@ static void sendN2kMessages(GwApi* api, GwLog* logger, uint8_t batteryInstance, 
     api->sendN2kMessage(dcStatusMsg);
 }
 
-void veDirectTask(GwApi *api)
-{
-    GwLog* logger = api->getLogger();
+static void switchToDevice(GwLog* logger, int deviceIdx) {
+    const VeDirectDeviceConfig& cfg = deviceConfigs[deviceIdx];
     
-    // Time to wait for a complete frame from each device
-    const unsigned long frameTimeout = 2000;  // VE.Direct sends every ~1s
-    
-    int currentDevice = 0;
-    bool serialInitialized = false;
-    
-    logger->logDebug(GwLog::LOG, "VE.Direct: %d device(s) configured", NUM_DEVICES);
-
-    while (true) {
-        const VeDirectDeviceConfig& cfg = deviceConfigs[currentDevice];
+    if (!g_serialVE) {
+        // First time: initialize Serial
+        g_serialVE = new HardwareSerial(2);
+        g_serialVE->begin(19200, SERIAL_8N1, cfg.rxPin, -1);
+    } else if (NUM_DEVICES > 1) {
+        // Remap RX pin without buffer reallocation
+        uart_set_pin(UART_NUM_2, UART_PIN_NO_CHANGE, cfg.rxPin, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
         
-        if (!serialInitialized) {
-            // First time: initialize Serial with first device's pin
-            SerialVE.begin(19200, SERIAL_8N1, cfg.rxPin, -1);
-            serialInitialized = true;
-        } else if (NUM_DEVICES > 1) {
-            // Subsequent switches: use uart_set_pin to remap RX without buffer reallocation
-            // UART2 = uart_num 2, only changing RX pin, TX/RTS/CTS stay as-is
-            uart_set_pin(UART_NUM_2, UART_PIN_NO_CHANGE, cfg.rxPin, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
-            
-            // Flush any leftover data from previous device
-            while (SerialVE.available()) {
-                SerialVE.read();
-            }
+        // Flush leftover data
+        while (g_serialVE->available()) {
+            g_serialVE->read();
         }
-        
-        // Clear old data completely to prevent stale data mixing between devices
-        // veEnd controls how many entries are valid, but frameEndEvent uses <= comparison
-        // so we also clear the first entry's name to be safe
-        frameHandler.veEnd = 0;
-        frameHandler.veData[0].veName[0] = '\0';
-        
-        logger->logDebug(GwLog::DEBUG, "VE.Direct: reading %s (GPIO %d)", cfg.name, cfg.rxPin);
-        
-        // Wait for data with timeout
-        unsigned long startTime = millis();
-        bool gotData = false;
-        
-        while ((millis() - startTime) < frameTimeout) {
-            while (SerialVE.available()) {
-                frameHandler.rxData(SerialVE.read());
-                gotData = true;
-            }
-            
-            // Check if we got a complete frame
-            if (gotData && frameHandler.veEnd > 0) {
-                break;
-            }
-            delay(10);
-        }
-        
-        // Send N2K messages if we got data
-        if (frameHandler.veEnd > 0) {
-            sendN2kMessages(api, logger, cfg.batteryInstance, cfg.name);
-        } else {
-            logger->logDebug(GwLog::DEBUG, "VE.Direct %s: no data", cfg.name);
-        }
-        
-        // Move to next device
-        currentDevice = (currentDevice + 1) % NUM_DEVICES;
-        
-        // Small delay between devices (only matters for single device)
-        if (NUM_DEVICES == 1) {
-            delay(3000);  // Wait before next read cycle
-        }
-        
-            // You can also check the current task (the one calling this)
-            logger->logDebug(GwLog::DEBUG, "VE DIRECT Current:    %u bytes remaining\n", uxTaskGetStackHighWaterMark(NULL));
     }
+    
+    // Clear old frame data
+    frameHandler.veEnd = 0;
+    frameHandler.veData[0].veName[0] = '\0';
+    
+    g_currentDevice = deviceIdx;
+    g_lastSwitchTime = millis();
+    
+    logger->logDebug(GwLog::DEBUG, "VE.Direct: now reading %s (GPIO %d)", cfg.name, cfg.rxPin);
+}
 
-
+static bool initHardware(GwApi* api) {
+    GwLog* logger = api->getLogger();
+    logger->logDebug(GwLog::LOG, "VE.Direct: %d device(s) configured", NUM_DEVICES);
+    
+    switchToDevice(logger, 0);
+    g_lastFrameTime = millis();
+    
+    return true;
 }
 
 void veDirectInit(GwApi *api)
 {
-    api->addUserTask(veDirectTask, "veDirectTask", 3072);
+    api->getLogger()->logDebug(GwLog::LOG, "VE.Direct: will init on first micro-task call");
+    
+    // Register micro-task with init callback
+    halmetRegisterMicroTask("VEDirect", 
+        // Periodic task
+        [](GwApi* api) {
+            GwLog* logger = api->getLogger();
+            
+            if (!g_serialVE) return;
+            
+            const VeDirectDeviceConfig& cfg = deviceConfigs[g_currentDevice];
+            unsigned long now = millis();
+            
+            // Read all available serial data (non-blocking)
+            while (g_serialVE->available()) {
+                frameHandler.rxData(g_serialVE->read());
+            }
+            
+            // Check if we got a complete frame
+            if (frameHandler.veEnd > 0) {
+                sendN2kMessages(api, logger, cfg.batteryInstance, cfg.name);
+                g_lastFrameTime = now;
+                
+                // Clear frame for next read
+                frameHandler.veEnd = 0;
+                frameHandler.veData[0].veName[0] = '\0';
+                
+                // For multi-device: rotate after getting a frame (if been on device long enough)
+                if (NUM_DEVICES > 1 && (now - g_lastSwitchTime) >= MIN_DEVICE_TIME_MS) {
+                    int next = (g_currentDevice + 1) % NUM_DEVICES;
+                    switchToDevice(logger, next);
+                }
+            } else {
+                // No frame yet - check for timeout (device not responding)
+                if ((now - g_lastFrameTime) > DEVICE_TIMEOUT_MS && NUM_DEVICES > 1) {
+                    logger->logDebug(GwLog::DEBUG, "VE.Direct %s: timeout, switching", cfg.name);
+                    int next = (g_currentDevice + 1) % NUM_DEVICES;
+                    switchToDevice(logger, next);
+                    g_lastFrameTime = now;  // Reset timeout for new device
+                }
+            }
+        },
+        // One-time init callback
+        initHardware
+    );
 }
 
 #endif

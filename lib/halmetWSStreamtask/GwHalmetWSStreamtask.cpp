@@ -1,14 +1,15 @@
 /**
  * WebSocket Stream Channel for Halmet
  * 
- * Standalone GwChannel implementation for WebSocket N2K streaming.
- * Uses NavLink Blue (PDGY) format for bidirectional N2K message exchange.
+ * Lightweight N2K message streaming over WebSocket.
+ * Uses Actisense ASCII format for bidirectional message exchange.
+ * Format: timestamp,priority,pgn,source,dest,len,hex,hex,...
  * 
  * Architecture:
- * - Implements GwChannelInterface, registered directly with GwChannelList
- * - Receives N2K via sendActisense() -> buffer -> ActisenseReader -> PDGY -> WS
- * - Sends N2K via WS data -> PDGY parse -> handleN2kMessage()
- * - No dedicated task - main.cpp loop drives via channel interface
+ * - Uses beginBidirectional() - channel manages queues internally
+ * - Transport only handles: WS connection, formatting, sending
+ * - Output: channel queues msg -> loop formats to ASCII -> WS textAll()
+ * - Input: WS text -> channel->queueIncoming() -> loop parse -> handleN2kMessage()
  * 
  * Endpoint: /ws
  */
@@ -21,267 +22,226 @@
 #include "GwLog.h"
 #include "GwChannel.h"
 #include "GwChannelList.h"
-#include "GwChannelInterface.h"
 #include "GwWebServer.h"
-#include "GwPdgyUtils.h"
 #include "GwHalmetTask.h"
 #include "N2kMsg.h"
-#include "ActisenseReader.h"
 #include <ESPAsyncWebServer.h>
+#include <time.h>
 
 extern GwChannelList channels;
 extern GwWebServer webserver;
-extern void handleN2kMessage(const tN2kMsg &n2kMsg, int sourceId, bool isConverted);
 
 #define WS_CHANNEL_ID 251
-#define WS_BUFFER_SIZE 256
+#define MAX_WS_CLIENTS 4
+#define CLIENT_QUEUE_LIMIT 8
+#define MIN_FREE_HEAP 20000
 
-// Queue for deferring WS message processing (callback context safety)
-#define WS_RX_QUEUE_SIZE 8
-#define WS_RX_MSG_SIZE 128  // Max PDGY message length
-
-static QueueHandle_t g_wsRxQueue = nullptr;
 static GwLog* g_logger = nullptr;
 static GwChannel* g_wsChannel = nullptr;
+static AsyncWebSocket* g_ws = nullptr;
 
-// Forward declarations
-class WSChannelImpl;
-static WSChannelImpl* g_wsImpl = nullptr;
-
-/**
- * Circular buffer for ActisenseReader input.
- */
-class WSCircularBuffer : public Stream {
-private:
-    uint8_t buffer[WS_BUFFER_SIZE];
-    volatile int writePos = 0;
-    volatile int readPos = 0;
-    volatile int count = 0;
-    
-public:
-    size_t write(uint8_t byte) override {
-        if (count >= WS_BUFFER_SIZE) {
-            // Drop oldest byte on overflow
-            readPos = (readPos + 1) % WS_BUFFER_SIZE;
-            count--;
-        }
-        buffer[writePos] = byte;
-        writePos = (writePos + 1) % WS_BUFFER_SIZE;
-        count++;
-        return 1;
-    }
-    
-    int available() override { return count; }
-    
-    int read() override { 
-        if (count == 0) return -1;
-        uint8_t b = buffer[readPos];
-        readPos = (readPos + 1) % WS_BUFFER_SIZE;
-        count--;
-        return b;
-    }
-    
-    int peek() override { 
-        return (count == 0) ? -1 : buffer[readPos];
-    }
-};
+//=============================================================================
+// Transport functions (provided to channel)
+//=============================================================================
 
 /**
- * WebSocket channel implementation.
- * 
- * GwChannelInterface methods:
- * - getStream(): Returns buffer for sendActisense() to write Actisense binary
- * - loop(): Parses buffer -> PDGY -> broadcasts to all connected WS clients
- * - readMessages/sendToClients: Not used (we handle our own distribution)
+ * Format N2K message to Actisense ASCII string.
  */
-class WSChannelImpl : public GwChannelInterface {
-private:
-    WSCircularBuffer* stream;
-    tActisenseReader reader;
-    AsyncWebSocket* ws;
-    unsigned long messageCount = 0;
+static int formatActisense(const tN2kMsg& msg, char* buf, size_t bufLen) {
+    if (!buf || bufLen < 64) return -1;
     
-public:
-    WSChannelImpl() {
-        stream = new WSCircularBuffer();
-        reader.SetReadStream(stream);
-        ws = nullptr;
+    time_t now;
+    time(&now);
+    struct tm timeinfo;
+    gmtime_r(&now, &timeinfo);
+    
+    int pos = strftime(buf, bufLen, "%Y-%m-%dT%H:%M:%S", &timeinfo);
+    pos += snprintf(buf + pos, bufLen - pos, ".%03dZ,%d,%lu,%d,%d,%d",
+                   (int)(millis() % 1000),
+                   msg.Priority, msg.PGN, msg.Source, msg.Destination, msg.DataLen);
+    
+    int dataLen = (msg.DataLen > 8) ? 8 : msg.DataLen;
+    for (int i = 0; i < dataLen && pos < (int)bufLen - 4; i++) {
+        pos += snprintf(buf + pos, bufLen - pos, ",%02x", msg.Data[i]);
     }
     
-    virtual ~WSChannelImpl() {
-        delete stream;
+    return pos;
+}
+
+/**
+ * Parse Actisense ASCII string to N2K message.
+ */
+static bool parseActisense(const char* line, tN2kMsg& msg) {
+    if (!line) return false;
+    
+    // Skip timestamp (find first comma)
+    const char* p = strchr(line, ',');
+    if (!p) return false;
+    p++;
+    
+    int priority, source, dest, len;
+    unsigned long pgn;
+    
+    if (sscanf(p, "%d,%lu,%d,%d,%d", &priority, &pgn, &source, &dest, &len) < 5) {
+        return false;
     }
     
-    void setWebSocket(AsyncWebSocket* socket) {
-        ws = socket;
+    msg.Init(priority, pgn, source, dest);
+    
+    // Skip to data fields (5 more commas)
+    for (int i = 0; i < 5 && p; i++) {
+        p = strchr(p, ',');
+        if (p) p++;
     }
     
-    AsyncWebSocket* getWebSocket() {
-        return ws;
+    // Parse hex data bytes
+    for (int i = 0; i < len && p; i++) {
+        unsigned int byte;
+        if (sscanf(p, "%02x", &byte) != 1) break;
+        msg.AddByte((uint8_t)byte);
+        p = strchr(p, ',');
+        if (p) p++;
     }
     
-    // GwChannelInterface implementation
-    virtual void loop(bool handleRead, bool handleWrite) override {
-        // Process queued incoming messages (from WS callback)
-        if (g_wsRxQueue) {
-            char msgBuf[WS_RX_MSG_SIZE];
-            while (xQueueReceive(g_wsRxQueue, msgBuf, 0) == pdTRUE) {
-                processIncoming(msgBuf);
-            }
-        }
-        
-        // Only send if we have connected clients
-        if (!ws || ws->count() == 0) return;
-        
-        // Parse Actisense binary from buffer, convert to PDGY, send to WS clients
-        tN2kMsg msg;
-        while (reader.GetMessageFromStream(msg)) {
-            messageCount++;
-            
-            char pdgyMsg[320];
-            int len = n2kMsgToPdgy(msg, pdgyMsg, sizeof(pdgyMsg));
-            if (len > 0) {
-                ws->textAll(pdgyMsg, len);
-            }
-        }
-    }
+    return msg.DataLen > 0;
+}
+
+/**
+ * Send formatted data to all WS clients.
+ */
+static bool sendWs(const char* data, size_t len) {
+    if (!g_ws || g_ws->count() == 0) return false;
     
-    virtual Stream* getStream(bool) override { return stream; }
-    virtual void readMessages(GwMessageFetcher*) override {}
-    virtual size_t sendToClients(const char*, int, bool) override { return 0; }
+    // Memory protection
+    if (ESP.getFreeHeap() < MIN_FREE_HEAP) return false;
     
-    unsigned long getMessageCount() const { return messageCount; }
-    
-    /**
-     * Process incoming PDGY message from a WebSocket client.
-     * Parses PDGY and injects into N2K system.
-     */
-    bool processIncoming(const char* pdgyLine) {
-        tN2kMsg msg;
-        if (!pdgyToN2kMsg(pdgyLine, msg)) {
-            if (g_logger) {
-                g_logger->logDebug(GwLog::DEBUG, "WS: PDGY parse failed: %.30s", pdgyLine);
-            }
+    // Check client queues
+    for (auto& c : g_ws->getClients()) {
+        if (c.status() == WS_CONNECTED && c.queueLen() > CLIENT_QUEUE_LIMIT) {
             return false;
         }
-        
-        // Inject into N2K system with our channel's sourceId
-        // This allows sendActisense() to skip echoing back to us
-        handleN2kMessage(msg, WS_CHANNEL_ID, false);
-        
-        if (g_logger) {
-            g_logger->logDebug(GwLog::DEBUG, "WS Rx: PGN %lu src %d", msg.PGN, msg.Source);
-        }
-        return true;
     }
-};
+    
+    g_ws->textAll(data, len);
+    return true;
+}
 
+/**
+ * Check if WS has connected clients.
+ */
+static bool isWsConnected() {
+    return g_ws && g_ws->count() > 0;
+}
+
+//=============================================================================
 // WebSocket event handler
+//=============================================================================
+
 static void onWsEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, 
                       AwsEventType type, void *arg, uint8_t *data, size_t len) {
     
     if (type == WS_EVT_CONNECT) {
+        if (server->count() > MAX_WS_CLIENTS) {
+            g_logger->logDebug(GwLog::LOG, "WS: rejecting client %u, too many", client->id());
+            client->close();
+            return;
+        }
+        
         g_logger->logDebug(GwLog::LOG, "WS: client %u connected, total=%d", 
                           client->id(), server->count());
         client->text("connected");
         
-        // Enable channel when first client connects
         if (server->count() == 1 && g_wsChannel) {
             g_wsChannel->enable(true);
-            g_logger->logDebug(GwLog::LOG, "WS: channel enabled");
         }
         
     } else if (type == WS_EVT_DISCONNECT) {
-        g_logger->logDebug(GwLog::LOG, "WS: client %u disconnected, remaining=%d", 
-                          client->id(), server->count());
+        g_logger->logDebug(GwLog::LOG, "WS: client %u disconnected", client->id());
         
-        // Disable channel when no clients (after count is decremented)
         if (server->count() == 0 && g_wsChannel) {
             g_wsChannel->enable(false);
-            g_logger->logDebug(GwLog::LOG, "WS: channel disabled");
         }
         
     } else if (type == WS_EVT_DATA) {
-        // Handle incoming PDGY messages - queue for processing in main loop
         AwsFrameInfo *info = (AwsFrameInfo*)arg;
         if (info->final && info->index == 0 && info->len == len && info->opcode == WS_TEXT) {
-            if (len > 0 && len < WS_RX_MSG_SIZE && g_wsRxQueue) {
-                char msgBuf[WS_RX_MSG_SIZE];
-                memcpy(msgBuf, data, len);
-                
-                // Strip trailing CR/LF
-                size_t plen = len;
-                while (plen > 0 && (msgBuf[plen-1] == '\r' || msgBuf[plen-1] == '\n')) {
-                    plen--;
-                }
-                msgBuf[plen] = '\0';
-                
-                // Queue PDGY messages for processing
-                if (strncmp(msgBuf, "!PDGY,", 6) == 0) {
-                    if (xQueueSend(g_wsRxQueue, msgBuf, 0) != pdTRUE) {
-                        if (g_logger) {
-                            g_logger->logDebug(GwLog::DEBUG, "WS: rx queue full, dropping");
-                        }
-                    }
+            // Queue incoming data - channel handles the rest
+            if (len > 10 && data[0] == '2' && data[1] == '0' && g_wsChannel) {
+                if (!g_wsChannel->queueIncoming((const char*)data, len)) {
+                    if (g_logger) g_logger->logDebug(GwLog::DEBUG, "WS: rx queue full");
                 }
             }
         }
     }
 }
 
+//=============================================================================
+// Microtask: cleanup and ping only (queues handled by channel loop)
+//=============================================================================
+
+static void wsMicroTask(GwApi* api) {
+    static unsigned long lastCleanup = 0;
+    static unsigned long lastPing = 0;
+    unsigned long now = millis();
+    
+    if (!g_ws) return;
+    
+    // Cleanup stale clients
+    if (now - lastCleanup > 1000) {
+        g_ws->cleanupClients();
+        lastCleanup = now;
+    }
+    
+    // Ping clients
+    if (g_ws->count() > 0 && now - lastPing > 5000) {
+        g_ws->pingAll();
+        lastPing = now;
+    }
+}
+
+//=============================================================================
+// Init
+//=============================================================================
+
 void wsStreamInit(GwApi* api) {
     g_logger = api->getLogger();
     g_logger->logDebug(GwLog::LOG, "WS Stream: init");
     
-    // Create RX queue for deferred processing (callback → main loop)
-    g_wsRxQueue = xQueueCreate(WS_RX_QUEUE_SIZE, WS_RX_MSG_SIZE);
-    if (!g_wsRxQueue) {
-        g_logger->logDebug(GwLog::ERROR, "WS: failed to create rx queue");
-        return;
-    }
+    // Create WebSocket
+    g_ws = new AsyncWebSocket("/ws");
+    g_ws->onEvent(onWsEvent);
+    g_ws->enable(true);
     
-    // Create channel implementation
-    g_wsImpl = new WSChannelImpl();
-    
-    // Create WebSocket and configure
-    AsyncWebSocket* ws = new AsyncWebSocket("/ws");
-    ws->onEvent(onWsEvent);
-    g_wsImpl->setWebSocket(ws);
-    
-    // Add WebSocket handler to server
+    // Add to server
     AsyncWebServer* server = webserver.getServer();
     if (server) {
-        server->addHandler(ws);
+        server->addHandler(g_ws);
         g_logger->logDebug(GwLog::LOG, "WS Stream: /ws handler added");
     }
     
-    // Create GwChannel wrapper
+    // Create bidirectional channel - queues managed by channel
     g_wsChannel = new GwChannel(g_logger, "WS", WS_CHANNEL_ID, -1);
-    g_wsChannel->setImpl(g_wsImpl);
+    if (!g_wsChannel->beginBidirectional(
+            formatActisense,   // formatter: N2K -> Actisense ASCII
+            parseActisense,    // parser: Actisense ASCII -> N2K
+            sendWs,            // sender: ASCII -> WS textAll
+            isWsConnected,     // connection check
+            16,                // TX queue size
+            4,                 // RX queue size
+            256                // RX message size
+        )) {
+        g_logger->logDebug(GwLog::ERROR, "WS: failed to create channel");
+        return;
+    }
     
-    // Configure: start disabled, Actisense read+write for bidirectional
-    g_wsChannel->begin(
-        false,  // enabled - start disabled until clients connect
-        false,  // NMEAin
-        false,  // NMEAout
-        "",     // readFilter
-        "",     // writeFilter
-        false,  // sendSeasmart
-        false,  // toN2k (we handle this ourselves)
-        true,   // readActisense - sets channelStream
-        true    // writeActisense - enables sendActisense
-    );
+    // Start disabled until clients connect
+    g_wsChannel->enable(false);
     
-    // Add to channel list
     channels.addChannel(g_wsChannel);
-    g_logger->logDebug(GwLog::LOG, "WS Stream: channel added (ID=%d)", WS_CHANNEL_ID);
+    g_logger->logDebug(GwLog::LOG, "WS Stream: bidirectional channel added (ID=%d)", WS_CHANNEL_ID);
     
-    // Register cleanup micro-task with halmetTask
-    halmetRegisterMicroTask("WS", []() {
-        if (g_wsImpl && g_wsImpl->getWebSocket()) {
-            g_wsImpl->getWebSocket()->cleanupClients();
-        }
-    });
+    // Microtask only handles cleanup/ping now
+    halmetRegisterMicroTask("WS", wsMicroTask);
 }
 
 #endif  // WS_STREAM_ENABLED

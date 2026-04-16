@@ -1,0 +1,337 @@
+/**
+ * WebSocket Stream Channel for Halmet
+ * 
+ * Lightweight N2K message streaming over WebSocket.
+ * Uses Actisense ASCII format for bidirectional message exchange.
+ * Format: timestamp,priority,pgn,source,dest,len,hex,hex,...
+ * 
+ * Architecture:
+ * - Uses beginCallbackOnly() for lightweight channel
+ * - Output: callback queues msg -> txProcessor formats to ASCII -> WS textAll()
+ * - Input: WS text -> queue -> microtask parse ASCII -> handleN2kMessage()
+ * 
+ * Both directions use queues because callbacks can run from async_tcp/timer
+ * daemon contexts but WS and handleN2kMessage need consistent context.
+ * 
+ * Endpoint: /ws
+ */
+#include "GwHalmetWSStreamtask.h"
+
+#ifdef BOARD_HALMET
+#ifdef WS_STREAM_ENABLED
+
+#include "GwApi.h"
+#include "GwLog.h"
+#include "GwChannel.h"
+#include "GwChannelList.h"
+#include "GwWebServer.h"
+#include "GwHalmetTask.h"
+#include "N2kMsg.h"
+#include <ESPAsyncWebServer.h>
+#include <time.h>
+
+extern GwChannelList channels;
+extern GwWebServer webserver;
+extern void handleN2kMessage(const tN2kMsg &n2kMsg, int sourceId, bool isConverted);
+
+#define WS_CHANNEL_ID 251
+#define WS_TX_QUEUE_SIZE 16
+#define WS_RX_QUEUE_SIZE 4
+#define WS_RX_MSG_SIZE 256
+
+// Queued TX message structure (compact representation)
+struct WsTxMsg {
+    unsigned long pgn;
+    uint8_t priority;
+    uint8_t source;
+    uint8_t dest;
+    uint8_t dataLen;
+    uint8_t data[8];  // Most N2K messages are 8 bytes
+};
+
+static QueueHandle_t g_wsTxQueue = nullptr;
+static QueueHandle_t g_wsRxQueue = nullptr;
+static GwLog* g_logger = nullptr;
+static GwChannel* g_wsChannel = nullptr;
+static AsyncWebSocket* g_ws = nullptr;
+
+// Stats
+static unsigned long g_messageCount = 0;
+static unsigned long g_droppedCount = 0;
+
+// Memory protection
+static const int MIN_FREE_HEAP = 20000;
+static const int CLIENT_QUEUE_LIMIT = 8;
+static const int MAX_WS_CLIENTS = 4;
+
+/**
+ * Format WsTxMsg to Actisense ASCII string.
+ */
+static int txMsgToActisenseASCII(const WsTxMsg& msg, char* buf, size_t bufLen) {
+    if (!buf || bufLen < 64) return -1;
+    
+    time_t now;
+    time(&now);
+    struct tm timeinfo;
+    gmtime_r(&now, &timeinfo);
+    
+    int pos = strftime(buf, bufLen, "%Y-%m-%dT%H:%M:%S", &timeinfo);
+    pos += snprintf(buf + pos, bufLen - pos, ".%03dZ,%d,%lu,%d,%d,%d",
+                   (int)(millis() % 1000),
+                   msg.priority, msg.pgn, msg.source, msg.dest, msg.dataLen);
+    
+    for (int i = 0; i < msg.dataLen && pos < (int)bufLen - 4; i++) {
+        pos += snprintf(buf + pos, bufLen - pos, ",%02x", msg.data[i]);
+    }
+    
+    return pos;
+}
+
+/**
+ * Parse Actisense ASCII string to tN2kMsg.
+ */
+static bool actisenseASCIIToN2kMsg(const char* line, tN2kMsg& msg) {
+    if (!line) return false;
+    
+    const char* p = strchr(line, ',');
+    if (!p) return false;
+    p++;
+    
+    int priority, source, dest, len;
+    unsigned long pgn;
+    
+    if (sscanf(p, "%d,%lu,%d,%d,%d", &priority, &pgn, &source, &dest, &len) < 5) {
+        return false;
+    }
+    
+    msg.Init(priority, pgn, source, dest);
+    
+    for (int i = 0; i < 5 && p; i++) {
+        p = strchr(p, ',');
+        if (p) p++;
+    }
+    
+    for (int i = 0; i < len && p; i++) {
+        unsigned int byte;
+        if (sscanf(p, "%02x", &byte) != 1) break;
+        msg.AddByte((uint8_t)byte);
+        p = strchr(p, ',');
+        if (p) p++;
+    }
+    
+    return msg.DataLen > 0;
+}
+
+/**
+ * N2K message callback - queues message for thread-safe sending.
+ * Called from any context (main loop, timer daemon, etc.)
+ */
+static void handleOutgoingN2k(const tN2kMsg& msg, int sourceId) {
+    if (!g_wsTxQueue) return;
+    if (!g_ws || g_ws->count() == 0) return;
+    
+    // Memory protection
+    if (ESP.getFreeHeap() < MIN_FREE_HEAP) {
+        g_droppedCount++;
+        return;
+    }
+    
+    // Queue the message (non-blocking)
+    WsTxMsg txMsg;
+    txMsg.pgn = msg.PGN;
+    txMsg.priority = msg.Priority;
+    txMsg.source = msg.Source;
+    txMsg.dest = msg.Destination;
+    txMsg.dataLen = (msg.DataLen > 8) ? 8 : msg.DataLen;
+    memcpy(txMsg.data, msg.Data, txMsg.dataLen);
+    
+    if (xQueueSend(g_wsTxQueue, &txMsg, 0) != pdTRUE) {
+        g_droppedCount++;
+    }
+}
+
+/**
+ * Process incoming Actisense ASCII message from WebSocket client.
+ */
+static bool processIncomingActisense(const char* line) {
+    tN2kMsg msg;
+    if (!actisenseASCIIToN2kMsg(line, msg)) {
+        return false;
+    }
+    handleN2kMessage(msg, WS_CHANNEL_ID, false);
+    return true;
+}
+
+// WebSocket event handler
+static void onWsEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, 
+                      AwsEventType type, void *arg, uint8_t *data, size_t len) {
+    
+    if (type == WS_EVT_CONNECT) {
+        if (server->count() > MAX_WS_CLIENTS) {
+            g_logger->logDebug(GwLog::LOG, "WS: rejecting client %u, too many", client->id());
+            client->close();
+            return;
+        }
+        
+        g_logger->logDebug(GwLog::LOG, "WS: client %u connected, total=%d", 
+                          client->id(), server->count());
+        client->text("connected");
+        
+        if (server->count() == 1 && g_wsChannel) {
+            g_wsChannel->enable(true);
+        }
+        
+    } else if (type == WS_EVT_DISCONNECT) {
+        g_logger->logDebug(GwLog::LOG, "WS: client %u disconnected", client->id());
+        
+        if (server->count() == 0 && g_wsChannel) {
+            g_wsChannel->enable(false);
+        }
+        
+    } else if (type == WS_EVT_DATA) {
+        AwsFrameInfo *info = (AwsFrameInfo*)arg;
+        if (info->final && info->index == 0 && info->len == len && info->opcode == WS_TEXT) {
+            if (len > 0 && len < WS_RX_MSG_SIZE) {
+                char msgBuf[WS_RX_MSG_SIZE];
+                memcpy(msgBuf, data, len);
+                
+                size_t plen = len;
+                while (plen > 0 && (msgBuf[plen-1] == '\r' || msgBuf[plen-1] == '\n')) {
+                    plen--;
+                }
+                msgBuf[plen] = '\0';
+                
+                // Queue for processing in microtask (not safe to call handleN2kMessage here)
+                if (plen > 10 && msgBuf[0] == '2' && msgBuf[1] == '0' && g_wsRxQueue) {
+                    if (xQueueSend(g_wsRxQueue, msgBuf, 0) != pdTRUE) {
+                        if (g_logger) g_logger->logDebug(GwLog::DEBUG, "WS: rx queue full");
+                    }
+                }
+            }
+        }
+    }
+}
+
+// Process RX queue - called from rxProcessor in main channel loop
+static void processRxQueue() {
+    if (!g_wsRxQueue) return;
+    
+    char msgBuf[WS_RX_MSG_SIZE];
+    int processed = 0;
+    while (processed < 10 && xQueueReceive(g_wsRxQueue, msgBuf, 0) == pdTRUE) {
+        processIncomingActisense(msgBuf);
+        processed++;
+    }
+}
+
+// Process TX queue - called from txProcessor in main channel loop
+static void processTxQueue() {
+    if (!g_wsTxQueue || !g_ws || g_ws->count() == 0) return;
+    
+    WsTxMsg txMsg;
+    int msgsSent = 0;
+    const int MAX_MSGS_PER_CALL = 10;  // Rate limit per call
+    
+    while (msgsSent < MAX_MSGS_PER_CALL && 
+           xQueueReceive(g_wsTxQueue, &txMsg, 0) == pdTRUE) {
+        
+        // Check client queues before sending
+        bool canSend = true;
+        for (auto& c : g_ws->getClients()) {
+            if (c.status() == WS_CONNECTED && c.queueLen() > CLIENT_QUEUE_LIMIT) {
+                canSend = false;
+                break;
+            }
+        }
+        
+        if (canSend) {
+            char asciiMsg[256];
+            int len = txMsgToActisenseASCII(txMsg, asciiMsg, sizeof(asciiMsg));
+            if (len > 0) {
+                g_ws->textAll(asciiMsg, len);
+                g_messageCount++;
+                msgsSent++;
+            }
+        } else {
+            g_droppedCount++;
+        }
+    }
+}
+
+// Microtask: fallback queue processing, cleanup and ping
+static void wsMicroTask(GwApi* api) {
+    static unsigned long lastCleanup = 0;
+    static unsigned long lastPing = 0;
+    unsigned long now = millis();
+    
+    if (!g_ws) return;
+    
+    // Fallback RX/TX processing in case main loop is slow
+    processRxQueue();
+    processTxQueue();
+    
+    // Cleanup stale clients
+    if (now - lastCleanup > 1000) {
+        g_ws->cleanupClients();
+        lastCleanup = now;
+    }
+    
+    // Ping clients
+    if (g_ws->count() > 0 && now - lastPing > 5000) {
+        g_ws->pingAll();
+        lastPing = now;
+    }
+}
+
+void wsStreamInit(GwApi* api) {
+    g_logger = api->getLogger();
+    g_logger->logDebug(GwLog::LOG, "WS Stream: init");
+    
+    // Create TX queue for thread-safe outgoing messages
+    g_wsTxQueue = xQueueCreate(WS_TX_QUEUE_SIZE, sizeof(WsTxMsg));
+    if (!g_wsTxQueue) {
+        g_logger->logDebug(GwLog::ERROR, "WS: failed to create tx queue");
+        return;
+    }
+    
+    // Create RX queue for thread-safe incoming messages
+    g_wsRxQueue = xQueueCreate(WS_RX_QUEUE_SIZE, WS_RX_MSG_SIZE);
+    if (!g_wsRxQueue) {
+        g_logger->logDebug(GwLog::ERROR, "WS: failed to create rx queue");
+        vQueueDelete(g_wsTxQueue);
+        g_wsTxQueue = nullptr;
+        return;
+    }
+    
+    // Create WebSocket
+    g_ws = new AsyncWebSocket("/ws");
+    g_ws->onEvent(onWsEvent);
+    g_ws->enable(true);
+    
+    // Add to server
+    AsyncWebServer* server = webserver.getServer();
+    if (server) {
+        server->addHandler(g_ws);
+        g_logger->logDebug(GwLog::LOG, "WS Stream: /ws handler added");
+    }
+    
+    // Create lightweight callback-only channel
+    g_wsChannel = new GwChannel(g_logger, "WS", WS_CHANNEL_ID, -1);
+    g_wsChannel->beginCallbackOnly(handleOutgoingN2k);
+    
+    // RX/TX processing runs in main channel loop for low latency
+    g_wsChannel->setRxProcessor(processRxQueue);
+    g_wsChannel->setTxProcessor(processTxQueue);
+    
+    // Start disabled until clients connect
+    g_wsChannel->enable(false);
+    
+    channels.addChannel(g_wsChannel);
+    g_logger->logDebug(GwLog::LOG, "WS Stream: callback channel added (ID=%d)", WS_CHANNEL_ID);
+    
+    // Register microtask for TX queue processing and cleanup
+    halmetRegisterMicroTask("WS", wsMicroTask);
+}
+
+#endif  // WS_STREAM_ENABLED
+#endif  // BOARD_HALMET

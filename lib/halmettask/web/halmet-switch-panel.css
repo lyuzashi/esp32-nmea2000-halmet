@@ -1,0 +1,256 @@
+/**
+ * Halmet Switch Panel Styles
+ * 
+ * Styles for the digital switching interface with
+ * indicator lights and toggle buttons.
+ */
+
+#halmet-switch-panel {
+    padding: 10px;
+    min-height: 300px;
+}
+
+.switch-panel-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 15px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid #333;
+}
+
+.switch-panel-header h2 {
+    margin: 0;
+    font-size: 1.4em;
+    color: #fff;
+}
+
+.ws-status {
+    padding: 4px 12px;
+    border-radius: 12px;
+    font-size: 0.8em;
+    font-weight: bold;
+}
+
+.ws-status.connected {
+    background: #1b5e20;
+    color: #81c784;
+}
+
+.ws-status.disconnected {
+    background: #b71c1c;
+    color: #ef9a9a;
+}
+
+.switch-panels {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 15px;
+}
+
+.no-data {
+    color: #888;
+    font-style: italic;
+    padding: 20px;
+    text-align: center;
+    width: 100%;
+}
+
+/* Bank Panel */
+.switch-bank {
+    background: #1a1a2e;
+    border: 1px solid #333;
+    border-radius: 8px;
+    padding: 12px;
+    min-width: 280px;
+}
+
+.switch-bank-header {
+    font-size: 1.1em;
+    font-weight: bold;
+    color: #fff;
+    margin-bottom: 12px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid #333;
+}
+
+/* Switch Grid */
+.switch-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 8px;
+}
+
+/* Individual Switch */
+.switch-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 8px;
+    background: #0f0f1a;
+    border-radius: 6px;
+    transition: background 0.2s;
+}
+
+.switch-item:hover {
+    background: #1f1f3a;
+}
+
+/* Status Indicator - LED style */
+.switch-indicator {
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    background: #333;
+    box-shadow: inset 0 2px 4px rgba(0,0,0,0.5);
+    margin-bottom: 4px;
+    position: relative;
+}
+
+/* Off state - dim */
+.switch-indicator::after {
+    content: '';
+    position: absolute;
+    top: 3px;
+    left: 3px;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: rgba(255,255,255,0.1);
+}
+
+/* Explicit Off state - subtle indicator */
+.switch-indicator.off {
+    background: #2d2d2d;
+    box-shadow: inset 0 2px 4px rgba(0,0,0,0.5);
+}
+
+/* On state - green glow */
+.switch-indicator.on {
+    background: #4caf50;
+    box-shadow: 
+        inset 0 2px 4px rgba(255,255,255,0.3),
+        0 0 8px rgba(76, 175, 80, 0.6),
+        0 0 16px rgba(76, 175, 80, 0.3);
+}
+
+/* Error state - red */
+.switch-indicator.error {
+    background: #f44336;
+    box-shadow: 
+        inset 0 2px 4px rgba(255,255,255,0.3),
+        0 0 8px rgba(244, 67, 54, 0.6);
+    animation: pulse-error 1s ease-in-out infinite;
+}
+
+/* Unavailable state - gray */
+.switch-indicator.unavailable {
+    background: #666;
+    opacity: 0.5;
+}
+
+/* Unknown state - amber/yellow with question mark effect */
+.switch-indicator.unknown {
+    background: #ff9800;
+    box-shadow: 
+        inset 0 2px 4px rgba(255,255,255,0.3),
+        0 0 8px rgba(255, 152, 0, 0.4);
+    opacity: 0.7;
+    animation: pulse-unknown 2s ease-in-out infinite;
+}
+
+@keyframes pulse-unknown {
+    0%, 100% { opacity: 0.7; }
+    50% { opacity: 0.4; }
+}
+
+@keyframes pulse-error {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.6; }
+}
+
+/* Switch Label */
+.switch-label {
+    font-size: 0.9em;
+    color: #aaa;
+    margin-bottom: 4px;
+}
+
+/* Toggle Button */
+.switch-button {
+    padding: 4px 12px;
+    font-size: 0.75em;
+    font-weight: bold;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: all 0.2s;
+    background: #2196f3;
+    color: white;
+}
+
+.switch-button:hover:not(:disabled) {
+    background: #1976d2;
+    transform: scale(1.05);
+}
+
+.switch-button:active:not(:disabled) {
+    transform: scale(0.95);
+}
+
+.switch-button:disabled {
+    background: #444;
+    color: #888;
+    cursor: not-allowed;
+}
+
+/* Button container for dual buttons */
+.switch-buttons {
+    display: flex;
+    gap: 4px;
+}
+
+.switch-buttons .switch-button {
+    padding: 4px 8px;
+    font-size: 0.7em;
+}
+
+.switch-button.on-btn {
+    background: #4caf50;
+}
+
+.switch-button.on-btn:hover:not(:disabled) {
+    background: #388e3c;
+}
+
+.switch-button.off-btn {
+    background: #f44336;
+}
+
+.switch-button.off-btn:hover:not(:disabled) {
+    background: #d32f2f;
+}
+
+/* Footer */
+.switch-panel-footer {
+    margin-top: 15px;
+    padding-top: 10px;
+    border-top: 1px solid #333;
+}
+
+.switch-panel-footer p {
+    margin: 0;
+    font-size: 0.8em;
+    color: #666;
+}
+
+/* Responsive */
+@media (max-width: 600px) {
+    .switch-grid {
+        grid-template-columns: repeat(2, 1fr);
+    }
+    
+    .switch-bank {
+        min-width: 100%;
+    }
+}

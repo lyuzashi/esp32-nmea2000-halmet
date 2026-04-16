@@ -1,0 +1,250 @@
+/**
+ * Halmet Dashboard CSS
+ */
+
+/* Hide the old Data tab - replaced by N2K Stream */
+.tab[data-page="dashboardPage"] {
+    display: none;
+}
+
+/* Tab ordering - push later tabs after N2K Stream (which has default order: 0) */
+.tab[data-page="xdrPage"],
+.tab[data-page="updatePage"],
+.tab#helpButton {
+    order: 1;
+}
+
+/* Full width container inside the dashboard tab */
+#halmet-preact-root {
+  flex-grow: 1;
+}
+
+/* Dashboard container */
+.halmet-dashboard {
+    display: flex;
+    flex-direction: column;
+    height: calc(100vh - 120px);
+    min-height: 400px;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+
+/* Header */
+.dashboard-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 15px;
+    background: #f5f5f5;
+    border-bottom: 1px solid #ddd;
+    flex-wrap: wrap;
+    gap: 10px;
+}
+
+.dashboard-header h3 {
+    margin: 0;
+    font-size: 1.1em;
+    color: #333;
+}
+
+.dashboard-controls {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+/* Status indicator */
+.status-indicator {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    display: inline-block;
+}
+
+/* Parser status */
+.parser-status {
+    font-size: 0.75em;
+    padding: 2px 6px;
+    border-radius: 3px;
+    font-weight: 500;
+}
+.parser-status.ready { color: #2e7d32; background: #e8f5e9; }
+.parser-status.loading { color: #f57c00; background: #fff3e0; }
+.parser-status.error { color: #c62828; background: #ffebee; }
+
+.status-text {
+    font-size: 0.85em;
+    color: #666;
+    min-width: 80px;
+}
+
+/* Filter input */
+.filter-input {
+    padding: 5px 10px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    font-size: 0.9em;
+    width: 120px;
+}
+
+.filter-input:focus {
+    outline: none;
+    border-color: #007bff;
+}
+
+/* Control buttons */
+.control-btn {
+    padding: 5px 12px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    background: #fff;
+    cursor: pointer;
+    font-size: 0.85em;
+    transition: all 0.2s;
+}
+
+.control-btn:hover {
+    background: #f0f0f0;
+}
+
+.control-btn.paused {
+    background: #fff3cd;
+    border-color: #ffc107;
+}
+
+/* Message log area */
+.message-log {
+    flex: 1;
+    overflow-y: auto;
+    background: #1e1e1e;
+    color: #d4d4d4;
+    font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+    font-size: 12px;
+    padding: 10px;
+}
+
+.empty-state {
+    color: #888;
+    text-align: center;
+    padding: 40px;
+    font-style: italic;
+}
+
+/* Log entries */
+.log-entry {
+    display: flex;
+    flex-direction: column;
+    padding: 4px 8px;
+    border-bottom: 1px solid #333;
+    cursor: pointer;
+    transition: background 0.1s;
+}
+
+.log-entry:hover {
+    background: #2d2d2d;
+}
+
+.log-entry.expanded {
+    background: #252526;
+}
+
+.log-entry-header {
+    display: flex;
+    gap: 12px;
+    align-items: center;
+}
+
+.log-time {
+    color: #6a9955;
+    flex-shrink: 0;
+    font-size: 11px;
+    min-width: 70px;
+}
+
+.log-pgn {
+    color: #569cd6;
+    font-weight: bold;
+    min-width: 60px;
+}
+
+.log-name {
+    color: #dcdcaa;
+    flex: 1;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.log-src {
+    color: #808080;
+    font-size: 11px;
+}
+
+.log-expand {
+    color: #808080;
+    font-size: 10px;
+    margin-left: auto;
+}
+
+.log-data {
+    color: #ce9178;
+    word-break: break-all;
+}
+
+/* Expanded details */
+.log-entry-details {
+    margin-top: 8px;
+    padding: 8px 12px;
+    background: #1a1a1a;
+    border-radius: 4px;
+    border-left: 3px solid #569cd6;
+}
+
+.log-field {
+    display: flex;
+    gap: 8px;
+    padding: 2px 0;
+}
+
+.field-name {
+    color: #9cdcfe;
+    min-width: 150px;
+}
+
+.field-value {
+    color: #ce9178;
+    word-break: break-all;
+}
+
+/* Footer */
+.dashboard-footer {
+    padding: 8px 15px;
+    background: #f5f5f5;
+    border-top: 1px solid #ddd;
+    font-size: 0.8em;
+    color: #666;
+}
+
+/* Error state */
+.halmet-dashboard .error {
+    color: #dc3545;
+    padding: 20px;
+    text-align: center;
+}
+
+/* Mobile responsive */
+@media (max-width: 600px) {
+    .dashboard-header {
+        flex-direction: column;
+        align-items: flex-start;
+    }
+    
+    .dashboard-controls {
+        width: 100%;
+    }
+    
+    .filter-input {
+        flex: 1;
+        min-width: 80px;
+    }
+}

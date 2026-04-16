@@ -52,6 +52,7 @@ Goals:
     * Custom data visualizer / logger from WS
 ✅ Websocket or SSE Actisense for streaming to web interface
     * Filtering of PGNs to allow for subscribing to all, none or specific messages based on what is displayed
+    * system time for actisense – I2C RTC and GPS sync?
 * ~PWM out for backlight (switch indicators) negative?~
 * I2C interface to expanded board
     * Reads load states from expander
