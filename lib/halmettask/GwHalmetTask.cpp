@@ -1,4 +1,5 @@
 #ifdef BOARD_HALMET
+#ifdef HALMET_TASK_ENABLED
 #include "GwHalmetTask.h"
 #include "GwApi.h"
 #include "N2kMessages.h"
@@ -142,4 +143,5 @@ void halmetInit(GwApi *api)
     api->addCapability("halmet", "true");
 }
 
-#endif
+#endif // HALMET_TASK_ENABLED
+#endif // BOARD_HALMET

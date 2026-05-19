@@ -11,6 +11,7 @@
  */
 
 #ifdef BOARD_HALMET
+#ifdef MESSAGE_CALLBACKS_ENABLED
 
 #include "GwHalmetMessagetask.h"
 #include "GwHalmetTask.h"
@@ -88,4 +89,5 @@ void halmetMessageInit(GwApi* api) {
     g_logger->logDebug(GwLog::LOG, "HalmetMsg: callback channel added (ID=%d)", MSG_CHANNEL_ID);
 }
 
+#endif  // MESSAGE_CALLBACKS_ENABLED
 #endif  // BOARD_HALMET

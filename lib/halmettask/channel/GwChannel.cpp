@@ -13,6 +13,8 @@
  * All other functionality identical to upstream.
  */
 
+#ifdef HALMET_USE_CUSTOM_CHANNEL
+
 // Halmet optimization flags (can be set in platformio.ini build_flags)
 // #define HALMET_CHANNEL_NO_COUNTERS    // Disable message counters
 // #define HALMET_CHANNEL_NO_JSON        // Stub out JSON/string serialization
@@ -189,16 +191,16 @@ void GwChannel::updateCounter(const char *msg, bool out)
 }
 
 bool GwChannel::canSendOut(const char *buffer, bool isSeasmart){
-#ifdef HALMET_CHANNEL_NO_NMEA0183
-    return false;  // HALMET: No NMEA0183 output
-#else
     if (! enabled || ! impl) return false;
     if (readActisense) return false;
+#ifdef HALMET_CHANNEL_NO_NMEA0183
+    // HALMET: keep SeaSmart forwarding, but block plain NMEA0183 output.
+    if (!isSeasmart) return false;
+#endif
     if (! isSeasmart && ! NMEAout) return false;
     if (isSeasmart && ! seaSmartOut) return false;
     if (writeFilter && ! writeFilter->canPass(buffer)) return false;
     return true;
-#endif
 }
 
 bool GwChannel::canReceive(const char *buffer){
@@ -279,8 +281,8 @@ void GwChannel::loop(bool handleRead, bool handleWrite){
                 msg.Init(txMsg.priority, txMsg.pgn, txMsg.source, txMsg.dest);
                 for (int i = 0; i < txMsg.dataLen; i++) msg.AddByte(txMsg.data[i]);
                 
-                // Format and send
-                char buf[320];
+                // Format and send (HALMET: 128 bytes is sufficient for Actisense ASCII)
+                char buf[128];
                 int len = formatter(msg, buf, sizeof(buf));
                 if (len > 0 && sender) {
                     sender(buf, len);
@@ -320,16 +322,12 @@ void GwChannel::readMessages(GwChannel::NMEA0183Handler handler){
 #endif
 }
 void GwChannel::sendToClients(const char *buffer, int sourceId, bool isSeasmart){
-#ifdef HALMET_CHANNEL_NO_NMEA0183
-    return;  // HALMET: No NMEA0183 output
-#else
     if (! impl) return;
     if (canSendOut(buffer,isSeasmart)){
         if(impl->sendToClients(buffer,sourceId)){
             updateCounter(buffer,true);
         }
     }
-#endif
 }
 void GwChannel::parseActisense(N2kHandler handler){
     if (!enabled || ! impl || ! readActisense || ! actisenseReader) return;
@@ -476,3 +474,5 @@ bool GwChannel::queueIncoming(const char* data, size_t len) {
     
     return xQueueSend(rxQueue, msgBuf, 0) == pdTRUE;
 }
+
+#endif

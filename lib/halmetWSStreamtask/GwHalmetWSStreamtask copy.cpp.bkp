@@ -1,0 +1,318 @@
+/**
+ * WebSocket Stream Channel for Halmet
+ * 
+ * Lightweight N2K message streaming over WebSocket.
+ * Uses Actisense ASCII format for bidirectional message exchange.
+ * Format: timestamp,priority,pgn,source,dest,len,hex,hex,...
+ * 
+ * Architecture:
+ * - Uses beginBidirectional() - channel manages queues internally
+ * - Transport only handles: WS connection, formatting, sending
+ * - Output: channel queues msg -> loop formats to ASCII -> WS textAll()
+ * - Input: WS text -> channel->queueIncoming() -> loop parse -> handleN2kMessage()
+ * 
+ * Endpoint: /ws
+ */
+#include "GwHalmetWSStreamtask.h"
+
+#ifdef BOARD_HALMET
+#ifdef WS_STREAM_ENABLED
+
+#include "GwApi.h"
+#include "GwLog.h"
+#include "GwChannel.h"
+#include "GwChannelList.h"
+#include "GwWebServer.h"
+#include "GwHalmetTask.h"
+#include "N2kMsg.h"
+#include <ESPAsyncWebServer.h>
+#include <time.h>
+#include <utility>
+
+extern GwChannelList channels;
+extern GwWebServer webserver;
+
+#define WS_CHANNEL_ID 251
+#define MAX_WS_CLIENTS 4
+#define CLIENT_QUEUE_LIMIT 8
+#define MIN_FREE_HEAP 20000
+
+static GwLog* g_logger = nullptr;
+static GwChannel* g_wsChannel = nullptr;
+static AsyncWebSocket* g_ws = nullptr;
+
+static inline AsyncWebSocketClient* asWsClientPtr(AsyncWebSocketClient* client) {
+    return client;
+}
+
+static inline AsyncWebSocketClient* asWsClientPtr(AsyncWebSocketClient& client) {
+    return &client;
+}
+
+template<int N>
+struct WsServerPriorityTag : WsServerPriorityTag<N - 1> {};
+
+template<>
+struct WsServerPriorityTag<0> {};
+
+template<typename T>
+static auto wsServerCanWriteImpl(T* ws, WsServerPriorityTag<1>)
+    -> decltype(ws->availableForWriteAll(), bool()) {
+    return ws->availableForWriteAll();
+}
+
+template<typename T>
+static bool wsServerCanWriteImpl(T*, WsServerPriorityTag<0>) {
+    return true;
+}
+
+static bool wsServerCanWrite(AsyncWebSocket* ws) {
+    if (!ws) return false;
+    return wsServerCanWriteImpl(ws, WsServerPriorityTag<1>{});
+}
+
+template<int N>
+struct WsPriorityTag : WsPriorityTag<N - 1> {};
+
+template<>
+struct WsPriorityTag<0> {};
+
+template<typename T>
+static auto wsClientQueueBlockedImpl(T* client, WsPriorityTag<3>)
+    -> decltype(client->queueLen(), bool()) {
+    return client->queueLen() > CLIENT_QUEUE_LIMIT;
+}
+
+template<typename T>
+static auto wsClientQueueBlockedImpl(T* client, WsPriorityTag<2>)
+    -> decltype(client->queueIsFull(), bool()) {
+    return client->queueIsFull();
+}
+
+template<typename T>
+static auto wsClientQueueBlockedImpl(T* client, WsPriorityTag<1>)
+    -> decltype(client->canSend(), bool()) {
+    return !client->canSend();
+}
+
+template<typename T>
+static bool wsClientQueueBlockedImpl(T*, WsPriorityTag<0>) {
+    return false;
+}
+
+static bool wsClientQueueBlocked(AsyncWebSocketClient* client) {
+    if (!client) return false;
+    return wsClientQueueBlockedImpl(client, WsPriorityTag<3>{});
+}
+
+//=============================================================================
+// Transport functions (provided to channel)
+//=============================================================================
+
+/**
+ * Format N2K message to Actisense ASCII string.
+ */
+static int formatActisense(const tN2kMsg& msg, char* buf, size_t bufLen) {
+    if (!buf || bufLen < 64) return -1;
+    
+    time_t now;
+    time(&now);
+    struct tm timeinfo;
+    gmtime_r(&now, &timeinfo);
+    
+    int pos = strftime(buf, bufLen, "%Y-%m-%dT%H:%M:%S", &timeinfo);
+    pos += snprintf(buf + pos, bufLen - pos, ".%03dZ,%d,%lu,%d,%d,%d",
+                   (int)(millis() % 1000),
+                   msg.Priority, msg.PGN, msg.Source, msg.Destination, msg.DataLen);
+    
+    int dataLen = (msg.DataLen > 8) ? 8 : msg.DataLen;
+    for (int i = 0; i < dataLen && pos < (int)bufLen - 4; i++) {
+        pos += snprintf(buf + pos, bufLen - pos, ",%02x", msg.Data[i]);
+    }
+    
+    return pos;
+}
+
+/**
+ * Parse Actisense ASCII string to N2K message.
+ */
+static bool parseActisense(const char* line, tN2kMsg& msg) {
+    if (!line) return false;
+    
+    // Skip timestamp (find first comma)
+    const char* p = strchr(line, ',');
+    if (!p) return false;
+    p++;
+    
+    int priority, source, dest, len;
+    unsigned long pgn;
+    
+    if (sscanf(p, "%d,%lu,%d,%d,%d", &priority, &pgn, &source, &dest, &len) < 5) {
+        return false;
+    }
+    
+    msg.Init(priority, pgn, source, dest);
+    
+    // Skip to data fields (5 more commas)
+    for (int i = 0; i < 5 && p; i++) {
+        p = strchr(p, ',');
+        if (p) p++;
+    }
+    
+    // Parse hex data bytes
+    for (int i = 0; i < len && p; i++) {
+        unsigned int byte;
+        if (sscanf(p, "%02x", &byte) != 1) break;
+        msg.AddByte((uint8_t)byte);
+        p = strchr(p, ',');
+        if (p) p++;
+    }
+    
+    return msg.DataLen > 0;
+}
+
+/**
+ * Send formatted data to all WS clients.
+ */
+static bool sendWs(const char* data, size_t len) {
+    if (!g_ws || g_ws->count() == 0) return false;
+    
+    // Memory protection
+    if (ESP.getFreeHeap() < MIN_FREE_HEAP) return false;
+
+    // Avoid textAll() queue fan-out: send only to clients that are writable right now.
+    // This drops frames for congested clients instead of letting WS queues grow heap usage.
+    bool sentAny = false;
+    bool serverWritable = wsServerCanWrite(g_ws);
+    for (auto& c : g_ws->getClients()) {
+        AsyncWebSocketClient* client = asWsClientPtr(c);
+        if (!client || client->status() != WS_CONNECTED) continue;
+        if (!serverWritable) continue;
+        if (wsClientQueueBlocked(client)) continue;
+        client->text(data, len);
+        sentAny = true;
+    }
+
+    return sentAny;
+}
+
+/**
+ * Check if WS has connected clients.
+ */
+static bool isWsConnected() {
+    return g_ws && g_ws->count() > 0;
+}
+
+//=============================================================================
+// WebSocket event handler
+//=============================================================================
+
+static void onWsEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, 
+                      AwsEventType type, void *arg, uint8_t *data, size_t len) {
+    
+    if (type == WS_EVT_CONNECT) {
+        if (server->count() > MAX_WS_CLIENTS) {
+            g_logger->logDebug(GwLog::LOG, "WS: rejecting client %u, too many", client->id());
+            client->close();
+            return;
+        }
+        
+        g_logger->logDebug(GwLog::LOG, "WS: client %u connected, total=%d", 
+                          client->id(), server->count());
+        client->text("connected");
+        
+        if (server->count() == 1 && g_wsChannel) {
+            g_wsChannel->enable(true);
+        }
+        
+    } else if (type == WS_EVT_DISCONNECT) {
+        g_logger->logDebug(GwLog::LOG, "WS: client %u disconnected", client->id());
+        
+        if (server->count() == 0 && g_wsChannel) {
+            g_wsChannel->enable(false);
+        }
+        
+    } else if (type == WS_EVT_DATA) {
+        AwsFrameInfo *info = (AwsFrameInfo*)arg;
+        if (info->final && info->index == 0 && info->len == len && info->opcode == WS_TEXT) {
+            // Queue incoming data - channel handles the rest
+            if (len > 10 && data[0] == '2' && data[1] == '0' && g_wsChannel) {
+                if (!g_wsChannel->queueIncoming((const char*)data, len)) {
+                    if (g_logger) g_logger->logDebug(GwLog::DEBUG, "WS: rx queue full");
+                }
+            }
+        }
+    }
+}
+
+//=============================================================================
+// Microtask: cleanup and ping only (queues handled by channel loop)
+//=============================================================================
+
+static void wsMicroTask(GwApi* api) {
+    static unsigned long lastCleanup = 0;
+    static unsigned long lastPing = 0;
+    unsigned long now = millis();
+    
+    if (!g_ws) return;
+    
+    // Cleanup stale clients
+    if (now - lastCleanup > 1000) {
+        g_ws->cleanupClients();
+        lastCleanup = now;
+    }
+    
+    // Ping clients
+    if (g_ws->count() > 0 && now - lastPing > 5000) {
+        g_ws->pingAll();
+        lastPing = now;
+    }
+}
+
+//=============================================================================
+// Init
+//=============================================================================
+
+void wsStreamInit(GwApi* api) {
+    g_logger = api->getLogger();
+    g_logger->logDebug(GwLog::LOG, "WS Stream: init");
+    
+    // Create WebSocket
+    g_ws = new AsyncWebSocket("/ws");
+    g_ws->onEvent(onWsEvent);
+    g_ws->enable(true);
+    
+    // Add to server
+    AsyncWebServer* server = webserver.getServer();
+    if (server) {
+        server->addHandler(g_ws);
+        g_logger->logDebug(GwLog::LOG, "WS Stream: /ws handler added");
+    }
+    
+    // Create bidirectional channel - queues managed by channel
+    g_wsChannel = new GwChannel(g_logger, "WS", WS_CHANNEL_ID, -1);
+    if (!g_wsChannel->beginBidirectional(
+            formatActisense,   // formatter: N2K -> Actisense ASCII
+            parseActisense,    // parser: Actisense ASCII -> N2K
+            sendWs,            // sender: ASCII -> WS textAll
+            isWsConnected,     // connection check
+            8,                 // TX queue size (reduced from 16)
+            4,                 // RX queue size
+            256                // RX message size
+        )) {
+        g_logger->logDebug(GwLog::ERROR, "WS: failed to create channel");
+        return;
+    }
+    
+    // Start disabled until clients connect
+    g_wsChannel->enable(false);
+    
+    channels.addChannel(g_wsChannel);
+    g_logger->logDebug(GwLog::LOG, "WS Stream: bidirectional channel added (ID=%d)", WS_CHANNEL_ID);
+    
+    // Microtask only handles cleanup/ping now
+    halmetRegisterMicroTask("WS", wsMicroTask);
+}
+
+#endif  // WS_STREAM_ENABLED
+#endif  // BOARD_HALMET

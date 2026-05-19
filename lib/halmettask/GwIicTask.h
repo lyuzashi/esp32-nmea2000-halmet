@@ -10,6 +10,7 @@
  */
 #ifndef _GWIICTASK_H
 #define _GWIICTASK_H
+#ifdef HALMET_IIC_ENABLED
 
 #include "GwApi.h"
 
@@ -18,4 +19,5 @@ void initIicTask(GwApi *api);
 // Declare as init function with late ordering (sensors need config ready first)
 DECLARE_INITFUNCTION_ORDER(initIicTask, GWLATEORDER);
 
+#endif  // HALMET_IIC_ENABLED
 #endif

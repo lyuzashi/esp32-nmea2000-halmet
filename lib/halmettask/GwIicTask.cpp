@@ -13,6 +13,7 @@
 #include "GwHardware.h"  // Defines _GWIIC when GWIIC_SCL is set
 
 #ifdef BOARD_HALMET
+#ifdef HALMET_IIC_ENABLED
 #ifdef _GWIIC
 
 #include "GwLog.h"
@@ -102,11 +103,29 @@ static bool initHardware(GwApi *api) {
         
         // Capture sensor and wire for lambda - api comes from g_currentApi during loop()
         HalmetSensorPtr s = sensor;
-        g_timers->addAction(sensor->intervalMs, [wire, s]() {
-            if (g_currentApi) {
-                s->measure(g_currentApi, wire, g_counterId);
-            }
-        });
+        if (sensor->useSamplePipeline()) {
+            long sampleMs = sensor->sampleIntervalMs > 0 ? sensor->sampleIntervalMs : 1000;
+            long publishMs = sensor->intervalMs > 0 ? sensor->intervalMs : 10000;
+
+            g_timers->addAction(sampleMs, [wire, s]() {
+                if (g_currentApi) {
+                    s->sample(g_currentApi, wire);
+                }
+            });
+            g_timers->addAction(publishMs, [s]() {
+                if (g_currentApi) {
+                    s->publish(g_currentApi, g_counterId);
+                }
+            });
+            LOG_DEBUG(GwLog::LOG, "%s: sampling=%ldms publish=%ldms",
+                      sensor->name.c_str(), sampleMs, publishMs);
+        } else {
+            g_timers->addAction(sensor->intervalMs, [wire, s]() {
+                if (g_currentApi) {
+                    s->measure(g_currentApi, wire, g_counterId);
+                }
+            });
+        }
         activeCount++;
     }
     
@@ -158,4 +177,5 @@ void initIicTask(GwApi *api) {
 }
 
 #endif  // _GWIIC
+#endif  // HALMET_IIC_ENABLED
 #endif  // BOARD_HALMET

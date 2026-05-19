@@ -14,6 +14,7 @@
 #include "GwApi.h"
 
 #ifdef BOARD_HALMET
+#ifdef HALMET_NMEA_CALLBACK_ENABLED
 
 /**
  * Initialize the NMEA message handler.
@@ -24,6 +25,7 @@ void halmetNMEAInit(GwApi* api);
 // Init order 50 - run early to debug
 DECLARE_INITFUNCTION_ORDER(halmetNMEAInit, 50);
 
+#endif  // HALMET_NMEA_CALLBACK_ENABLED
 #endif  // BOARD_HALMET
 
 #endif  // GW_HALMET_NMEATASK_H

@@ -10,6 +10,7 @@
  */
 
 #ifdef BOARD_HALMET
+#ifdef TIME_SYNC_ENABLED
 
 #include "GwHalmetTimetask.h"
 #include "GwHalmetTask.h"
@@ -172,4 +173,5 @@ void halmetTimeInit(GwApi* api) {
     halmetRegisterMicroTask("timeSync", timeSyncTask, timeSyncInit);
 }
 
+#endif  // TIME_SYNC_ENABLED
 #endif  // BOARD_HALMET

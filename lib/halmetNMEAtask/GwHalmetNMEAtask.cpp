@@ -8,6 +8,7 @@
 #include "GwHalmetNMEAtask.h"
 
 #ifdef BOARD_HALMET
+#ifdef HALMET_NMEA_CALLBACK_ENABLED
 
 #include "GwHalmetTask.h"  // For halmetRegisterMicroTask
 #include "NMEA2000.h"
@@ -98,4 +99,5 @@ void halmetNMEAInit(GwApi* api) {
     halmetRegisterMicroTask("N2kHandler", nmea2kHandlerTask, nmea2kHandlerInit);
 }
 
+#endif  // HALMET_NMEA_CALLBACK_ENABLED
 #endif  // BOARD_HALMET

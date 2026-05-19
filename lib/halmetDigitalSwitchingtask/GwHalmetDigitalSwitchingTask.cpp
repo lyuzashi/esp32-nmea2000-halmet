@@ -110,6 +110,10 @@ static void onSwitchControl(const tN2kMsg& msg) {
         return;  // Parse failed
     }
 
+    if (g_logger) {
+        g_logger->logDebug(GwLog::DEBUG, "DigSwitch: received PGN127502 for bank %d", targetBank);
+    }
+
 
     
     // Check if this is for a bank we manage
@@ -155,7 +159,7 @@ static void onSwitchControl(const tN2kMsg& msg) {
         // Copy changes for the lambda
         std::vector<SwitchChange> deferredChanges(changes, changes + changeCount);
         
-        halmetDefer([bank, status, deferredChanges]() {
+        bool queued = halmetDefer([bank, status, deferredChanges]() {
             // Execute physical writes
             for (const auto& change : deferredChanges) {
                 writePhysicalOutput(bank, change.sw, change.state);
@@ -166,6 +170,22 @@ static void onSwitchControl(const tN2kMsg& msg) {
             SetN2kBinaryStatus(response, bank, status);
             g_api->sendN2kMessage(response);
         });
+
+        if (!queued) {
+            if (g_logger) {
+                g_logger->logDebug(GwLog::ERROR,
+                                   "DigSwitch: defer queue full/unavailable, applying control immediately");
+            }
+
+            // Fallback path: ensure controls still work under load.
+            for (const auto& change : deferredChanges) {
+                writePhysicalOutput(bank, change.sw, change.state);
+            }
+
+            tN2kMsg response;
+            SetN2kBinaryStatus(response, bank, status);
+            g_api->sendN2kMessage(response);
+        }
     }
 }
 
@@ -220,7 +240,6 @@ static bool digitalSwitchingInit(GwApi* api) {
     
     // Register callback for PGN 127502 (Switch Bank Control)
     halmetRegisterPgnCallback(127502, onSwitchControl);
-    
     g_logger->logDebug(GwLog::LOG, "DigSwitch: Registered PGN 127502 callback");
     
     return true;

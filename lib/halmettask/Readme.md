@@ -25,41 +25,45 @@ Goals:
 ✅ NMEA CAN bus 
     * connects to instrument network and provides read/write of PGN
 ✅ BLE serial over characteristic 
-    * Transmit/receive raw binary NMEA messages with base64 encoding 
-    *  Match Navlink Blue published format 
-✅  BLE receive
-✅  WS ~HTML POST~ endpoint to receive messages
+    ✅ Transmit/receive raw binary NMEA messages with base64 encoding 
+    ✅ Match Navlink Blue published format 
+    ✅  BLE receive
+✅  WS streaming / receive messages
 ✅ Victron solar charger interface over digital in
+    ➡️ Use dedicated UART for each VE.Direct port. This board has 3 (first for USB)
     * Isolated digital input pin mapped to internal UART
     * Reads solar charge data
     * Writes DC charge data to NMEA
+    ➡️ Try using HEX https://github.com/StrathbogieBrewing/VEDirect
+    ➡️ Connect over external full-duplex isolator
 * Victron Smart Shunt interface over digital in
     * Isolated digital input pin mapped to internal UART
     * Reads current/voltage data for house and start batteries
     * Writes DC load data to NMEA
 * Digital inputs
     * Isolated input supports 12v
-    * Connect to bilge pumps manual wire
-    * Power to input triggers NMEA bilge alarm
-➡️ Analogue inputs
-    * Tank level sender analogue in (via I2C chip)
-    * Maps resistance to level for water/fuel
-    * Writes level data to NMEA
+    * Connect to relay-controlled loads
+    * Power to input triggers binary status update
+    * Responds to binary switch from NMEA
+* I2C interface to expanded board
+    * Reads load states from expander
+    * Writes binary status to NMEA
+    * Writes outputs to expander 
+    > standard NMEA 2000 PGN 127501 "Binary Status Report" and PGN 127502 "Binary Switch Control".
+✅ Analogue inputs
+    ✅ Tank level sender analogue in (via I2C chip)
+    ✅ Maps resistance to level for water/fuel
+    ✅ Writes level data to NMEA
+    ➡️ Adjust to tank curve
 ✅ Web interface for 
     ✅ firmware update 
-    * Setting tank level mapping?
-    * Individual feature switches
-    * Custom data visualizer / logger from WS
+    ➡️ Setting tank level mapping?
+    🔂 Individual feature switches
+    🔂 Custom data visualizer / logger from WS
 ✅ Websocket or SSE Actisense for streaming to web interface
     * Filtering of PGNs to allow for subscribing to all, none or specific messages based on what is displayed
     * system time for actisense – I2C RTC and GPS sync?
 * ~PWM out for backlight (switch indicators) negative?~
-* I2C interface to expanded board
-    * Reads load states from expander
-    * Writes binary status to NMEA
-    * Responds to binary switch from NMEA
-    * Writes outputs to expander 
-    > standard NMEA 2000 PGN 127501 "Binary Status Report" and PGN 127502 "Binary Switch Control".
 ✅ I2C Humidity/Temp/Pressure
 ✅ 1-wire temp probes
     * sea water (in-hull)

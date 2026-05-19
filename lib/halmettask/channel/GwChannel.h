@@ -1,4 +1,9 @@
 #pragma once
+
+#ifndef HALMET_USE_CUSTOM_CHANNEL
+#include "../../channel/GwChannel.h"
+#else
+
 #include "GwChannelInterface.h"
 #include "GwConfigItem.h"
 #include "GwLog.h"
@@ -176,4 +181,6 @@ class GwChannel{
     String getMode(){return typeString(impl->getType());}
     int getMinId(){return sourceId;};
 };
+
+#endif
 

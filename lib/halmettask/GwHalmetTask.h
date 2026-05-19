@@ -5,6 +5,7 @@
 
 //we only compile for some boards
 #ifdef BOARD_HALMET
+#ifdef HALMET_TASK_ENABLED
 //we could add the following defines also in our local platformio.ini
 //CAN base 
 // #define M5_CAN_KIT
@@ -63,8 +64,7 @@ bool halmetDefer(HalmetDeferredCallback callback);
 void halmetInit(GwApi *api);
 void halmetTask(GwApi *api);
 
-
 DECLARE_INITFUNCTION(halmetInit);
 
-
+#endif // HALMET_TASK_ENABLED
 #endif

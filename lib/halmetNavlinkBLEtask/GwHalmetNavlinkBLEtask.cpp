@@ -221,7 +221,7 @@ void navlinkBLEInit(GwApi* api) {
             parsePdgy,       // parser: PDGY -> N2K
             sendBle,         // sender: PDGY -> BLE notify
             isBleConnected,  // connection check
-            16,              // TX queue size
+            8,               // TX queue size (reduced from 16)
             4,               // RX queue size
             128              // RX message size
         )) {

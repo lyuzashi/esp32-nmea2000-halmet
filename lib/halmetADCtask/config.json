@@ -1,0 +1,96 @@
+[
+    {
+        "name": "tank1Enable",
+        "label": "Tank 1 Enable",
+        "type": "boolean",
+        "default": "false",
+        "description": "Enable tank level sensor on ADC channel A1",
+        "category": "tanks"
+    },
+    {
+        "name": "tank1FluidType",
+        "label": "Tank 1 Fluid Type",
+        "type": "list",
+        "default": "0",
+        "list": ["Fuel", "Water", "Gray Water", "Live Well", "Oil", "Black Water"],
+        "description": "Type of fluid in tank 1",
+        "category": "tanks"
+    },
+    {
+        "name": "tank1Capacity",
+        "label": "Tank 1 Capacity (L)",
+        "type": "number",
+        "default": "100",
+        "min": 1,
+        "max": 65535,
+        "description": "Tank capacity in liters",
+        "category": "tanks"
+    },
+    {
+        "name": "tank1EmptyV",
+        "label": "Tank 1 Empty Voltage (x0.1V)",
+        "type": "number",
+        "default": "0",
+        "min": 0,
+        "max": 330,
+        "description": "Sensor voltage at empty (0-33V, in 0.1V units)",
+        "category": "tanks"
+    },
+    {
+        "name": "tank1FullV",
+        "label": "Tank 1 Full Voltage (x0.1V)",
+        "type": "number",
+        "default": "100",
+        "min": 0,
+        "max": 330,
+        "description": "Sensor voltage at full (0-33V, in 0.1V units)",
+        "category": "tanks"
+    },
+    {
+        "name": "tank2Enable",
+        "label": "Tank 2 Enable",
+        "type": "boolean",
+        "default": "false",
+        "description": "Enable tank level sensor on ADC channel A2",
+        "category": "tanks"
+    },
+    {
+        "name": "tank2FluidType",
+        "label": "Tank 2 Fluid Type",
+        "type": "list",
+        "default": "1",
+        "list": ["Fuel", "Water", "Gray Water", "Live Well", "Oil", "Black Water"],
+        "description": "Type of fluid in tank 2",
+        "category": "tanks"
+    },
+    {
+        "name": "tank2Capacity",
+        "label": "Tank 2 Capacity (L)",
+        "type": "number",
+        "default": "100",
+        "min": 1,
+        "max": 65535,
+        "description": "Tank capacity in liters",
+        "category": "tanks"
+    },
+    {
+        "name": "tank2EmptyV",
+        "label": "Tank 2 Empty Voltage (x0.1V)",
+        "type": "number",
+        "default": "0",
+        "min": 0,
+        "max": 330,
+        "description": "Sensor voltage at empty (0-33V, in 0.1V units)",
+        "category": "tanks"
+    },
+    {
+        "name": "tank2FullV",
+        "label": "Tank 2 Full Voltage (x0.1V)",
+        "type": "number",
+        "default": "100",
+        "min": 0,
+        "max": 330,
+        "description": "Sensor voltage at full (0-33V, in 0.1V units)",
+        "category": "tanks"
+    }
+]

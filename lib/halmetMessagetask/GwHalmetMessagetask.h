@@ -23,6 +23,7 @@
 #include "N2kMsg.h"
 
 #ifdef BOARD_HALMET
+#ifdef MESSAGE_CALLBACKS_ENABLED
 
 /**
  * Initialize message callback channel.
@@ -32,7 +33,6 @@ void halmetMessageInit(GwApi* api);
 // Init before TimeTask (150 < 160)
 DECLARE_INITFUNCTION_ORDER(halmetMessageInit, 150);
 
-#endif  // BOARD_HALMET
 
 // Callback type for PGN handlers
 typedef void (*HalmetPgnCallback)(const tN2kMsg& msg);
@@ -57,4 +57,6 @@ bool halmetRegisterPgnCallback(unsigned long pgn, HalmetPgnCallback callback);
  */
 bool halmetUnregisterPgnCallback(unsigned long pgn, HalmetPgnCallback callback);
 
+#endif  // MESSAGE_CALLBACKS_ENABLED
+#endif  // BOARD_HALMET
 #endif  // GW_HALMET_MESSAGETASK_H
